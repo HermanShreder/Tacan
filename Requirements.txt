@@ -1,0 +1,3 @@
+ccxt==4.4.15
+aiohttp==3.11.11
+python-telegram-bot==21.10
