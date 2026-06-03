@@ -11,9 +11,9 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # --- НАСТРОЙКИ ---
 TELEGRAM_TOKEN = "7930993307:AAHuIxRVgr9OD7ZP_D2dbrbEu-JGBdZSnc4"
 CHAT_ID = "5253808709"  
-MIN_VOLUME_USD = 100000  
+MIN_VOLUME_USD = 30000   # Снизил лимит объема до $30k для более частых сигналов
 TRADE_SIZE_USD = 500     
-MIN_SPREAD_PCT = 1.0     
+MIN_SPREAD_PCT = 0.3     # Снизил спред до 0.3% чистыми для тестов
 
 bot = Bot(token=TELEGRAM_TOKEN)
 EXCHANGES_LIST = ['binance', 'bybit', 'okx', 'gate', 'kucoin', 'bitget', 'mexc', 'bingx', 'htx', 'kraken']
@@ -24,7 +24,7 @@ class HealthCheckServer(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-type", "text/html")
         self.end_headers()
-        self.wfile.write(b"Bot is alive!")
+        self.wfile.write(b"Bot is fully optimized and running!")
 
 def run_health_server():
     try:
@@ -38,8 +38,11 @@ async def get_effective_price_and_fees(exchange_obj, symbol, side, target_amount
         orderbook = await exchange_obj.fetch_order_book(symbol, limit=20)
         orders = orderbook['asks'] if side == 'buy' else orderbook['bids']
         
-        market = exchange_obj.market(symbol)
-        taker_fee_pct = market.get('taker', 0.001)
+        try:
+            market = exchange_obj.market(symbol)
+            taker_fee_pct = market.get('taker', 0.001)
+        except:
+            taker_fee_pct = 0.002 # Безопасный дефолт 0.2% если биржа скрыла инфо
         
         total_usd = 0
         total_crypto = 0
@@ -47,7 +50,8 @@ async def get_effective_price_and_fees(exchange_obj, symbol, side, target_amount
             cost = price * amount
             if total_usd + cost >= target_amount_usd:
                 needed_usd = target_amount_usd - total_usd
-                total_crypto += needed_crypto = needed_usd / price
+                needed_crypto = needed_usd / price
+                total_crypto += needed_crypto
                 total_usd += needed_usd
                 break
             else:
@@ -61,8 +65,8 @@ async def get_effective_price_and_fees(exchange_obj, symbol, side, target_amount
 
 async def check_networks_and_contracts(coin, ex_buy, ex_sell):
     try:
-        buy_curr = ex_buy.currencies.get(coin, {}) if ex_buy.currencies else {}
-        sell_curr = ex_sell.currencies.get(coin, {}) if ex_sell.currencies else {}
+        buy_curr = ex_buy.currencies.get(coin, {}) if (hasattr(ex_buy, 'currencies') and ex_buy.currencies) else {}
+        sell_curr = ex_sell.currencies.get(coin, {}) if (hasattr(ex_sell, 'currencies') and ex_sell.currencies) else {}
         
         if not buy_curr.get('withdraw', True) or not sell_curr.get('deposit', True): return None
         contract_buy = buy_curr.get('address') or buy_curr.get('info', {}).get('contractAddress')
@@ -71,7 +75,7 @@ async def check_networks_and_contracts(coin, ex_buy, ex_sell):
         if contract_buy and contract_sell and str(contract_buy).lower() != str(contract_sell).lower(): return None
         best_network = "AUTO/MAINNET"
         withdraw_fee_crypto = buy_curr.get('fee', 0.0)
-        if 'networks' in buy_curr:
+        if 'networks' in buy_curr and isinstance(buy_curr['networks'], dict):
             for net_name, net_data in buy_curr['networks'].items():
                 if net_data.get('withdraw') and sell_curr.get('networks', {}).get(net_name, {}).get('deposit'):
                     best_network = net_name
@@ -95,7 +99,9 @@ async def validate_active_spreads(initialized_exchanges):
             if p_buy and p_sell:
                 if (((p_sell - p_buy) / p_buy) * 100) >= MIN_SPREAD_PCT: still_valid = True
             if not still_valid:
-                try: await bot.delete_message(chat_id=CHAT_ID, message_id=data["message_id"])
+                try: 
+                    await bot.delete_message(chat_id=CHAT_ID, message_id=data["message_id"])
+                    await asyncio.sleep(0.05)
                 except: pass
                 to_delete.append(spread_id)
         except: to_delete.append(spread_id)
@@ -111,7 +117,6 @@ async def scan_markets():
                 ex_class = getattr(ccxt, ex_id)
                 ex_instance = ex_class({'enableRateLimit': True})
                 await ex_instance.load_markets()
-                # Проверяем, что рынки загрузились корректно и это словарь
                 if ex_instance.markets and isinstance(ex_instance.markets, dict):
                     exchanges[ex_id] = ex_instance
                     logging.info(f"✅ Биржа {ex_id} успешно подключена.")
@@ -125,8 +130,13 @@ async def scan_markets():
         try:
             for coin in test_coins:
                 symbol = f"{coin}/USDT"
-                # Защищенная проверка наличия рынков
-                available_exchanges = [ex_id for ex_id, ex in exchanges.items() if ex.markets and symbol in ex.markets]
+                
+                # ЖЕСТКАЯ ЗАЩИТА от NoneType. Проверяем, что markets существует и является словарем
+                available_exchanges = []
+                for ex_id, ex in exchanges.items():
+                    if ex.markets and isinstance(ex.markets, dict) and symbol in ex.markets:
+                        available_exchanges.append(ex_id)
+                        
                 if len(available_exchanges) < 2: continue
                 
                 prices = {}
@@ -134,7 +144,7 @@ async def scan_markets():
                     ex = exchanges[ex_id]
                     try:
                         ticker = await ex.fetch_ticker(symbol)
-                        if ticker.get('quoteVolume', 0) < MIN_VOLUME_USD: continue
+                        if not ticker or ticker.get('quoteVolume', 0) < MIN_VOLUME_USD: continue
                         buy_p, _, b_fee = await get_effective_price_and_fees(ex, symbol, 'buy', TRADE_SIZE_USD)
                         sell_p, _, s_fee = await get_effective_price_and_fees(ex, symbol, 'sell', TRADE_SIZE_USD)
                         if buy_p and sell_p: prices[ex_id] = {'buy': buy_p, 'sell': sell_p, 'b_fee': b_fee, 's_fee': s_fee}
@@ -158,7 +168,7 @@ async def scan_markets():
                         
                         net_profit_usd = ((TRADE_SIZE_USD / p_buy) * p_sell - TRADE_SIZE_USD) - total_fees
                         net_spread_pct = (net_profit_usd / TRADE_SIZE_USD) * 100
-                        if net_spread_pct < 0.1: continue
+                        if net_spread_pct < 0.05: continue # Пропускаем если круг уходит в минус
                         
                         link_buy = f"https://{ex_buy_id}.com/trade/{coin}_USDT"
                         link_sell = f"https://{ex_sell_id}.com/trade/{coin}_USDT"
@@ -174,10 +184,11 @@ async def scan_markets():
                         try:
                             msg = await bot.send_message(chat_id=CHAT_ID, text=msg_text, parse_mode="Markdown", disable_web_page_preview=True)
                             active_spreads[spread_id] = {"message_id": msg.message_id, "start_time": asyncio.get_event_loop().time()}
+                            await asyncio.sleep(0.05) # Защита от лимитов TG флуда
                         except Exception as e: logging.error(f"TG error: {e}")
             await validate_active_spreads(exchanges)
         except Exception as e:
-            logging.error(f"Ошибка итерации: {e}")
+            logging.error(f"Внутренняя ошибка итерации: {e}")
         finally:
             for ex_id, ex in exchanges.items():
                 try: await ex.close()
