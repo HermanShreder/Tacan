@@ -8,12 +8,12 @@ import threading
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# --- НАСТРОЙКИ ---
+# --- НАСТРОЙКИ (ТВОЙ ID И ТЗ) ---
 TELEGRAM_TOKEN = "7930993307:AAHuIxRVgr9OD7ZP_D2dbrbEu-JGBdZSnc4"
 CHAT_ID = "5253808709"  
-MIN_VOLUME_USD = 30000   # Снизил лимит объема до $30k для более частых сигналов
-TRADE_SIZE_USD = 500     
-MIN_SPREAD_PCT = 0.3     # Снизил спред до 0.3% чистыми для тестов
+MIN_VOLUME_USD = 100000  # Возвращаем $100k по ТЗ
+TRADE_SIZE_USD = 500     # Возвращаем круг $500 по ТЗ
+MIN_SPREAD_PCT = 1.0     # Минимальный чистый спред 1% по ТЗ
 
 bot = Bot(token=TELEGRAM_TOKEN)
 EXCHANGES_LIST = ['binance', 'bybit', 'okx', 'gate', 'kucoin', 'bitget', 'mexc', 'bingx', 'htx', 'kraken']
@@ -24,7 +24,7 @@ class HealthCheckServer(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-type", "text/html")
         self.end_headers()
-        self.wfile.write(b"Bot is fully optimized and running!")
+        self.wfile.write(b"Bot is scanning ALL spot markets!")
 
 def run_health_server():
     try:
@@ -42,7 +42,7 @@ async def get_effective_price_and_fees(exchange_obj, symbol, side, target_amount
             market = exchange_obj.market(symbol)
             taker_fee_pct = market.get('taker', 0.001)
         except:
-            taker_fee_pct = 0.002 # Безопасный дефолт 0.2% если биржа скрыла инфо
+            taker_fee_pct = 0.002
         
         total_usd = 0
         total_crypto = 0
@@ -50,8 +50,7 @@ async def get_effective_price_and_fees(exchange_obj, symbol, side, target_amount
             cost = price * amount
             if total_usd + cost >= target_amount_usd:
                 needed_usd = target_amount_usd - total_usd
-                needed_crypto = needed_usd / price
-                total_crypto += needed_crypto
+                total_crypto += needed_crypto = needed_usd / price
                 total_usd += needed_usd
                 break
             else:
@@ -87,7 +86,6 @@ async def check_networks_and_contracts(coin, ex_buy, ex_sell):
 
 async def validate_active_spreads(initialized_exchanges):
     to_delete = []
-    current_time = asyncio.get_event_loop().time()
     for spread_id, data in list(active_spreads.items()):
         coin, ex_buy_id, ex_sell_id = spread_id.split('_')
         symbol = f"{coin}/USDT"
@@ -109,29 +107,36 @@ async def validate_active_spreads(initialized_exchanges):
 
 async def scan_markets():
     while True:
-        logging.info("🔄 Инициализация сессий и запуск сканирования рынка...")
+        logging.info("🔄 Шаг 1: Подключение к биржам...")
         exchanges = {}
+        all_usdt_symbols = set()
         
+        # Подключаем биржи и собираем ВСЕ их монеты
         for ex_id in EXCHANGES_LIST:
             try:
                 ex_class = getattr(ccxt, ex_id)
                 ex_instance = ex_class({'enableRateLimit': True})
                 await ex_instance.load_markets()
+                
                 if ex_instance.markets and isinstance(ex_instance.markets, dict):
                     exchanges[ex_id] = ex_instance
-                    logging.info(f"✅ Биржа {ex_id} успешно подключена.")
+                    # Фильтруем только СПОТ и только к USDT
+                    for sym, market_data in ex_instance.markets.items():
+                        if market_data.get('spot') and sym.endswith('/USDT'):
+                            all_usdt_symbols.add(sym)
                 else:
                     await ex_instance.close()
             except Exception as e:
-                logging.error(f"❌ Пропуск биржи {ex_id} (Гео-блок или ошибка API)")
+                pass # Пропускаем гео-блокированные биржи без падения скрипта
                 
-        test_coins = ['BTC', 'ETH', 'SOL', 'XRP', 'ADA', 'DOT', 'LINK', 'AVAX', 'LTC', 'NEAR', 'TRX', 'DOGE', 'SHIB', 'ATOM']
+        logging.info(f"📊 Всего уникальных USDT пар обнаружено на биржах: {len(all_usdt_symbols)}")
         
         try:
-            for coin in test_coins:
-                symbol = f"{coin}/USDT"
+            # Сканируем абсолютно КАЖДУЮ найденную пару
+            for symbol in all_usdt_symbols:
+                coin = symbol.split('/')[0] # Получаем чистое имя монеты (например BTC)
                 
-                # ЖЕСТКАЯ ЗАЩИТА от NoneType. Проверяем, что markets существует и является словарем
+                # Ищем на каких биржах есть эта пара
                 available_exchanges = []
                 for ex_id, ex in exchanges.items():
                     if ex.markets and isinstance(ex.markets, dict) and symbol in ex.markets:
@@ -145,6 +150,7 @@ async def scan_markets():
                     try:
                         ticker = await ex.fetch_ticker(symbol)
                         if not ticker or ticker.get('quoteVolume', 0) < MIN_VOLUME_USD: continue
+                        
                         buy_p, _, b_fee = await get_effective_price_and_fees(ex, symbol, 'buy', TRADE_SIZE_USD)
                         sell_p, _, s_fee = await get_effective_price_and_fees(ex, symbol, 'sell', TRADE_SIZE_USD)
                         if buy_p and sell_p: prices[ex_id] = {'buy': buy_p, 'sell': sell_p, 'b_fee': b_fee, 's_fee': s_fee}
@@ -168,7 +174,7 @@ async def scan_markets():
                         
                         net_profit_usd = ((TRADE_SIZE_USD / p_buy) * p_sell - TRADE_SIZE_USD) - total_fees
                         net_spread_pct = (net_profit_usd / TRADE_SIZE_USD) * 100
-                        if net_spread_pct < 0.05: continue # Пропускаем если круг уходит в минус
+                        if net_spread_pct < MIN_SPREAD_PCT: continue 
                         
                         link_buy = f"https://{ex_buy_id}.com/trade/{coin}_USDT"
                         link_sell = f"https://{ex_sell_id}.com/trade/{coin}_USDT"
@@ -184,7 +190,7 @@ async def scan_markets():
                         try:
                             msg = await bot.send_message(chat_id=CHAT_ID, text=msg_text, parse_mode="Markdown", disable_web_page_preview=True)
                             active_spreads[spread_id] = {"message_id": msg.message_id, "start_time": asyncio.get_event_loop().time()}
-                            await asyncio.sleep(0.05) # Защита от лимитов TG флуда
+                            await asyncio.sleep(0.05)
                         except Exception as e: logging.error(f"TG error: {e}")
             await validate_active_spreads(exchanges)
         except Exception as e:
@@ -193,8 +199,8 @@ async def scan_markets():
             for ex_id, ex in exchanges.items():
                 try: await ex.close()
                 except: pass
-            logging.info("🔒 Сессии очищены.")
-        await asyncio.sleep(6)
+            logging.info("🔒 Круг завершен. Сессии очищены.")
+        await asyncio.sleep(5)
 
 if __name__ == '__main__':
     threading.Thread(target=run_health_server, daemon=True).start()
