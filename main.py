@@ -7,7 +7,7 @@ from telegram import Bot
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 TELEGRAM_TOKEN = "7930993307:AAHuIxRVgr9OD7ZP_D2dbrbEu-JGBdZSnc4"
-CHAT_ID = "ТВОЙ_ЛИЧНЫЙ_TELEGRAM_CHAT_ID"  # Замени на свой ID через @userinfobot
+CHAT_ID = "5253808709"  # Замени на свой ID через @userinfobot
 MIN_VOLUME_USD = 100000  
 TRADE_SIZE_USD = 500     
 MIN_SPREAD_PCT = 1.0     
