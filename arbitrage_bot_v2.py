@@ -73,7 +73,7 @@ class HealthCheckServer(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-type", "text/html")
         self.end_headers()
-        self.wfile.write(b"Arbitrage Bot is running with Risk Mitigation Logic!")
+        self.wfile.write(b"Arbitrage Bot is running perfectly!")
 
 def run_health_server():
     try:
@@ -97,7 +97,7 @@ async def get_order_book_depth(exchange, symbol, side, amount_usd):
         
         try:
             market = exchange.market(symbol)
-            taker_fee = float(market.get('taker', 0.003)) # Закладываем 0.3% по дефолту для мелких бирж
+            taker_fee = float(market.get('taker', 0.003))
         except:
             taker_fee = 0.003
             
@@ -226,7 +226,6 @@ async def validate_and_update_spreads(initialized_exchanges):
                 net_profit = gross_profit - total_fees
                 net_spread = (net_profit / TRADE_SIZE_USD) * 100
                 
-                # Обновляем только если спред в безопасных границах
                 if MIN_SPREAD_PCT <= net_spread <= MAX_SPREAD_PCT:
                     still_valid = True
                     lifetime_sec = int(current_time - data["start_time"])
@@ -278,21 +277,27 @@ def run_telegram_bot():
     application.run_polling(allowed_updates=['message', 'callback_query'])
 
 async def scan_all_markets():
+    logger.info("⏳ Инициализация бирж (выполняется один раз при запуске)...")
+    exchanges = {}
+    
+    # Подключаемся ко всем биржам ОДИН РАЗ, соединения больше не обрываем!
+    for ex_id in EXCHANGES_LIST:
+        try:
+            ex_class = getattr(ccxt, ex_id)
+            instance = ex_class({'enableRateLimit': True, 'timeout': 15000})
+            await instance.load_markets()
+            exchanges[ex_id] = instance
+            logger.info(f"✅ Биржа {ex_id.upper()} успешно готова к работе.")
+        except Exception as e:
+            logger.warning(f"⚠️ Не удалось подключить {ex_id.upper()}: {e}")
+            continue
+
     scan_count = 0
     while True:
         scan_count += 1
-        logger.info(f"🔄 Скан круг #{scan_count}...")
-        exchanges = {}
+        logger.info(f"🔄 Скан круг #{scan_count}... Активно бирж: {len(exchanges)}")
         all_tickers = {}
         current_time = time.time()
-        
-        for ex_id in EXCHANGES_LIST:
-            try:
-                ex_class = getattr(ccxt, ex_id)
-                instance = ex_class({'enableRateLimit': True, 'timeout': 15000})
-                await instance.load_markets()
-                exchanges[ex_id] = instance
-            except: continue
 
         async def fetch_tickers_safe(ex_id, exchange_obj):
             try:
@@ -300,7 +305,7 @@ async def scan_all_markets():
                 for sym, t in tickers.items():
                     if '/USDT' in sym and not sym.startswith('USDC'):
                         coin = sym.split('/')[0]
-                        if coin in BLACKLIST_COINS: continue # Фильтр черного списка на входе
+                        if coin in BLACKLIST_COINS: continue
                         
                         vol = float(t.get('quoteVolume') or 0)
                         bid = float(t.get('bid') or 0)
@@ -359,7 +364,7 @@ async def scan_all_markets():
                             try:
                                 msg = await bot.send_message(chat_id=CHAT_ID, text=msg_text, parse_mode="Markdown", disable_web_page_preview=True)
                                 active_spreads[spread_key] = {"message_id": msg.message_id, "start_time": time.time(), "last_update": time.time()}
-                                logger.info(f"✅ Спред {spread_key} подтвержден после 2-х минут! Отправлен в ТГ.")
+                                logger.info(f"✅ Спред {spread_key} подтвержден! Отправлен в ТГ.")
                             except: pass
 
         chunks = list(all_tickers.items())
@@ -371,14 +376,8 @@ async def scan_all_markets():
             if k not in fresh_detected_keys and k not in active_spreads:
                 del detected_candidates[k]
         
+        # Обновляем таймеры жизни постов в ТГ
         await validate_and_update_spreads(exchanges)
-        
-        # Безопасное закрытие сессий с таймаутом (защита от вечного зависания)
-        for ex in exchanges.values():
-            try: 
-                await asyncio.wait_for(ex.close(), timeout=2.0)
-            except: 
-                pass
             
         await asyncio.sleep(10)
 
