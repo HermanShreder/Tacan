@@ -17,19 +17,24 @@ logger = logging.getLogger(__name__)
 TELEGRAM_TOKEN = "7930993307:AAHuIxRVgr9OD7ZP_D2dbrbEu-JGBdZSnc4"
 CHAT_ID = "5253808709"
 
-# Торговые настройки (ПО ТВОЕМУ ТЗ)
+# Торговые настройки
 TRADE_SIZE_USD = 500
 MIN_SPREAD_PCT = 0.3
-MIN_VOLUME_USD = 10000
+MAX_SPREAD_PCT = 15.0   # Максимальный спред (защита от скама, делистингов и багов)
+MIN_VOLUME_USD = 100000 # Минимальный объем торгов за 24ч (защита от неликвида)
 
-# Список всех бирж для максимального охвата
+# Черный список монет (токены-двойники, разные сети, проблемные активы)
+BLACKLIST_COINS = {'KEY', 'STAR', 'BOND', 'MIRA', 'WILD', 'MAGIC', 'NATIVE'}
+
+# Список всех бирж
 EXCHANGES_LIST = [
     'binance', 'bybit', 'okx', 'gate', 'kucoin', 'bitget', 'mexc', 
     'bingx', 'htx', 'kraken', 'coinbase', 'huobi', 'poloniex', 
     'hitbtc', 'exmo', 'bitfinex', 'bitmart', 'lbank', 'ascendex',
-    'coinex', 'whitebit', 'bittrue', 'phemex'
+    'coinex', 'whitebit', 'bitrue', 'phemex'
 ]
 
+# Данные по сетям
 NETWORKS_INFO = {
     'SOL': {'name': 'Solana', 'time_min': 0.03, 'time_max': 0.08, 'fee': 0.0005, 'speed': '⚡️⚡️⚡️', 'risk': 'low', 'recommended': True},
     'XLM': {'name': 'Stellar', 'time_min': 0.05, 'time_max': 0.08, 'fee': 0.0001, 'speed': '⚡️⚡️⚡️', 'risk': 'low', 'recommended': True},
@@ -57,7 +62,10 @@ NETWORKS_INFO = {
 }
 
 exchange_stats = defaultdict(lambda: {'buy_count': 0, 'sell_count': 0, 'total_profit': 0})
-active_spreads = {}  # Хранилище: { spread_id: {message_id, start_time, last_update} }
+
+detected_candidates = {} 
+active_spreads = {}      
+
 bot = Bot(token=TELEGRAM_TOKEN)
 
 class HealthCheckServer(BaseHTTPRequestHandler):
@@ -65,7 +73,7 @@ class HealthCheckServer(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-type", "text/html")
         self.end_headers()
-        self.wfile.write(b"Arbitrage Bot is fully operational and monitoring ALL spot markets!")
+        self.wfile.write(b"Arbitrage Bot is running with Risk Mitigation Logic!")
 
 def run_health_server():
     try:
@@ -89,9 +97,9 @@ async def get_order_book_depth(exchange, symbol, side, amount_usd):
         
         try:
             market = exchange.market(symbol)
-            taker_fee = float(market.get('taker', 0.002))
+            taker_fee = float(market.get('taker', 0.003)) # Закладываем 0.3% по дефолту для мелких бирж
         except:
-            taker_fee = 0.002
+            taker_fee = 0.003
             
         total_cost = 0
         total_amount = 0
@@ -149,7 +157,24 @@ async def check_withdrawal_network(exchange, coin):
 
 def generate_buy_link(exchange_id, symbol):
     coin = symbol.split('/')[0]
-    return f"https://{exchange_id}.com/trade/{coin}_USDT"
+    pair = symbol.replace('/', '')
+    
+    base_urls = {
+        'binance': f"https://www.binance.com/en/trade/{coin}_USDT?type=spot",
+        'bybit': f"https://www.bybit.com/trade/spot/{coin}/USDT",
+        'okx': f"https://www.okx.com/trade-spot/{coin.lower()}-usdt",
+        'gate': f"https://www.gate.io/trade/{coin}_USDT",
+        'kucoin': f"https://www.kucoin.com/trade/{coin}-USDT",
+        'mexc': f"https://www.mexc.com/exchange/{coin}_USDT",
+        'bitget': f"https://www.bitget.com/spot/{pair}",
+        'kraken': f"https://trade.kraken.com/markets/kraken/{coin.lower()}/usdt",
+        'coinbase': f"https://www.coinbase.com/advanced-trading/{coin}-USDT",
+        'huobi': f"https://www.huobi.com/en-us/exchange/{coin.lower()}_usdt",
+        'bingx': f"https://bingx.com/en/spot/{pair}",
+        'bitmart': f"https://www.bitmart.com/trade/en?symbol={pair}",
+        'phemex': f"https://phemex.com/trade/spot/{pair}",
+    }
+    return base_urls.get(exchange_id, f"https://{exchange_id}.com/trade/{coin}_USDT")
 
 def format_signal_text(coin, buy_ex, sell_ex, p_buy, p_sell, buy_fee, sell_fee, net_info, net_profit, net_spread, lifetime_sec):
     link_buy = generate_buy_link(buy_ex, f"{coin}/USDT")
@@ -161,10 +186,11 @@ def format_signal_text(coin, buy_ex, sell_ex, p_buy, p_sell, buy_fee, sell_fee, 
     rec_icon = "RECOMMENDED" if net_info.get('recommended', True) else "EXPENSIVE NETWORK"
     
     return (
-        f"⚡️ **НАЙДЕН АРБИТРАЖНЫЙ СПРЕД: #{coin}** ⚡️\n━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🟢 **ПОКУПКА: {buy_ex.upper()}**\n💵 Цена: `{p_buy:.4f} USDT`\n📊 Круг: `${TRADE_SIZE_USD}`\n🔗 [Купить]({link_buy})\n"
+        f"⚡️ **НАЙДЕН АРБИТРАЖНЫЙ СПРЕД: #{coin}** ⚡️\n"
+        f"⚠️ **ВАЖНО: РУКАМИ ПРОВЕРЯЙ ВВОД/ВЫВОД НА БИРЖАХ!**\n━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🟢 **ПОКУПКА: {buy_ex.upper()}**\n💵 Цена: `{p_buy:.4f} USDT`\n📊 Круг: `${TRADE_SIZE_USD}`\n🔗 [Открыть пару на {buy_ex.upper()}]({link_buy})\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🔴 **ПРОДАЖА: {sell_ex.upper()}**\n💵 Цена: `{p_sell:.4f} USDT`\n🔗 [Продать]({link_sell})\n"
+        f"🔴 **ПРОДАЖА: {sell_ex.upper()}**\n💵 Цена: `{p_sell:.4f} USDT`\n🔗 [Открыть пару на {sell_ex.upper()}]({link_sell})\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📦 **СЕТЬ: {net_info['network']}**\n├ Комиссия сети: `${net_info['fee']:.2f}`\n└ Время перевода: `{net_info['time_min']}-{net_info['time_max']} мин`\n"
         f"{net_info['speed_icon']} **{rec_icon}**\n"
@@ -177,7 +203,6 @@ def format_signal_text(coin, buy_ex, sell_ex, p_buy, p_sell, buy_fee, sell_fee, 
     )
 
 async def validate_and_update_spreads(initialized_exchanges):
-    """Каждые 30 секунд перепроверяет активные спреды, меняет цену/время в ТГ или удаляет если спред умер"""
     to_delete = []
     current_time = time.time()
     
@@ -201,7 +226,8 @@ async def validate_and_update_spreads(initialized_exchanges):
                 net_profit = gross_profit - total_fees
                 net_spread = (net_profit / TRADE_SIZE_USD) * 100
                 
-                if net_spread >= MIN_SPREAD_PCT:
+                # Обновляем только если спред в безопасных границах
+                if MIN_SPREAD_PCT <= net_spread <= MAX_SPREAD_PCT:
                     still_valid = True
                     lifetime_sec = int(current_time - data["start_time"])
                     updated_text = format_signal_text(coin, buy_ex, sell_ex, p_buy, p_sell, b_fee, s_fee, net_info, net_profit, net_spread, lifetime_sec)
@@ -224,10 +250,8 @@ async def validate_and_update_spreads(initialized_exchanges):
 async def stats_command():
     stats_message = "📊 **АРБИТРАЖНАЯ СТАТИСТИКА** 📊\n━━━━━━━━━━━━━━━━━━━━━━\n"
     stats_message += f"Время выгрузки: {datetime.now().strftime('%H:%M:%S')}\n\n"
-    
     total_opp = sum(s['buy_count'] + s['sell_count'] for s in exchange_stats.values())
     total_profit = sum(s['total_profit'] for s in exchange_stats.values())
-    
     stats_message += f"💎 Всего сигналов поймано: **{total_opp}**\n"
     stats_message += f"💰 Математический профит: **${total_profit:.2f}**\n━━━━━━━━━━━━━━━━━━━━━━\n"
     return stats_message
@@ -257,39 +281,39 @@ async def scan_all_markets():
     scan_count = 0
     while True:
         scan_count += 1
-        logger.info(f"🔄 Скан круг #{scan_count} - Инициализация подключений...")
+        logger.info(f"🔄 Скан круг #{scan_count}...")
         exchanges = {}
         all_tickers = {}
+        current_time = time.time()
         
-        # 1. Параллельный сбор рынков со всех доступных бирж
         for ex_id in EXCHANGES_LIST:
             try:
                 ex_class = getattr(ccxt, ex_id)
                 instance = ex_class({'enableRateLimit': True, 'timeout': 15000})
                 await instance.load_markets()
                 exchanges[ex_id] = instance
-            except:
-                continue
+            except: continue
 
-        # 2. Асинхронный быстрый сбор тикеров
         async def fetch_tickers_safe(ex_id, exchange_obj):
             try:
                 tickers = await exchange_obj.fetch_tickers()
                 for sym, t in tickers.items():
                     if '/USDT' in sym and not sym.startswith('USDC'):
+                        coin = sym.split('/')[0]
+                        if coin in BLACKLIST_COINS: continue # Фильтр черного списка на входе
+                        
                         vol = float(t.get('quoteVolume') or 0)
                         bid = float(t.get('bid') or 0)
                         ask = float(t.get('ask') or 0)
                         if vol >= MIN_VOLUME_USD and bid > 0 and ask > 0:
                             if sym not in all_tickers: all_tickers[sym] = {}
                             all_tickers[sym][ex_id] = {'bid': bid, 'ask': ask, 'vol': vol}
-            except:
-                pass
+            except: pass
 
         await asyncio.gather(*[fetch_tickers_safe(eid, ex) for eid, ex in exchanges.items()])
-        logger.info(f"📊 Всего уникальных USDT пар на проверку: {len(all_tickers)}")
         
-        # 3. Поиск первичных зазоров цен и углубленный параллельный обсчет стаканов
+        fresh_detected_keys = set()
+
         async def process_single_symbol(symbol, exchange_data):
             coin = symbol.split('/')[0]
             buy_list = sorted([(eid, d['ask']) for eid, d in exchange_data.items()], key=lambda x: x[1])[:3]
@@ -298,12 +322,23 @@ async def scan_all_markets():
             for buy_ex, ask_p in buy_list:
                 for sell_ex, bid_p in sell_list:
                     if buy_ex == sell_ex: continue
-                    if ((bid_p - ask_p) / ask_p) * 100 < MIN_SPREAD_PCT: continue
+                    
+                    raw_spread = ((bid_p - ask_p) / ask_p) * 100
+                    if raw_spread < MIN_SPREAD_PCT or raw_spread > MAX_SPREAD_PCT: continue
                     
                     spread_key = f"{coin}_{buy_ex}_{sell_ex}"
+                    fresh_detected_keys.add(spread_key)
+                    
                     if spread_key in active_spreads: continue
                     
-                    # Точный расчет стакана
+                    if spread_key not in detected_candidates:
+                        detected_candidates[spread_key] = current_time
+                        logger.info(f"⏳ Спред {spread_key} зафиксирован ({raw_spread:.2f}%). Ждем 2 минуты стабильности...")
+                        continue
+                    
+                    if current_time - detected_candidates[spread_key] < 120:
+                        continue
+                    
                     p_buy, _, b_fee = await get_order_book_depth(exchanges[buy_ex], symbol, 'buy', TRADE_SIZE_USD)
                     p_sell, _, s_fee = await get_order_book_depth(exchanges[sell_ex], symbol, 'sell', TRADE_SIZE_USD)
                     
@@ -314,7 +349,7 @@ async def scan_all_markets():
                         net_profit = gross_profit - total_fees
                         net_spread = (net_profit / TRADE_SIZE_USD) * 100
                         
-                        if net_spread >= MIN_SPREAD_PCT:
+                        if MIN_SPREAD_PCT <= net_spread <= MAX_SPREAD_PCT:
                             exchange_stats[buy_ex]['buy_count'] += 1
                             exchange_stats[buy_ex]['total_profit'] += net_profit
                             exchange_stats[sell_ex]['sell_count'] += 1
@@ -324,24 +359,27 @@ async def scan_all_markets():
                             try:
                                 msg = await bot.send_message(chat_id=CHAT_ID, text=msg_text, parse_mode="Markdown", disable_web_page_preview=True)
                                 active_spreads[spread_key] = {"message_id": msg.message_id, "start_time": time.time(), "last_update": time.time()}
-                            except:
-                                pass
+                                logger.info(f"✅ Спред {spread_key} подтвержден после 2-х минут! Отправлен в ТГ.")
+                            except: pass
 
-        # Запускаем конкурентный обсчет стаканов по всем монетам порциями, чтобы не вешать event-loop
         chunks = list(all_tickers.items())
         for i in range(0, len(chunks), 30):
             await asyncio.gather(*[process_single_symbol(sym, edata) for sym, edata in chunks[i:i+30]])
             await asyncio.sleep(0.05)
             
-        # 4. Обновление текущих алертов в реальном времени
+        for k in list(detected_candidates.keys()):
+            if k not in fresh_detected_keys and k not in active_spreads:
+                del detected_candidates[k]
+        
         await validate_and_update_spreads(exchanges)
         
-        # Освобождение сессий
+        # Безопасное закрытие сессий с таймаутом (защита от вечного зависания)
         for ex in exchanges.values():
-            try: await ex.close()
-            except: pass
+            try: 
+                await asyncio.wait_for(ex.close(), timeout=2.0)
+            except: 
+                pass
             
-        logger.info(f"🔒 Круг завершен. Активных спредов на ведении: {len(active_spreads)}")
         await asyncio.sleep(10)
 
 if __name__ == '__main__':
