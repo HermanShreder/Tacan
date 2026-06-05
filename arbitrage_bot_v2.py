@@ -36,8 +36,8 @@ EXCHANGE_KEYS = {
 # Торговые настройки
 TRADE_SIZE_USD = 500
 MIN_SPREAD_PCT = 0.3
-MAX_SPREAD_PCT = 15.0   
-MIN_VOLUME_USD = 50000  # Изменено с 100000 на 50000 (50к)
+MAX_SPREAD_PCT = 50.0  # Увеличено с 15% до 50%
+MIN_VOLUME_USD = 50000
 MAX_WITHDRAWAL_TIME_MIN = 30
 
 # Черный список монет
@@ -76,7 +76,7 @@ class HealthCheckServer(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-type", "text/html")
         self.end_headers()
-        self.wfile.write(b"Bot is running. Same network check enabled.")
+        self.wfile.write(b"Bot is running. Full search mode enabled.")
 
 def run_health_server():
     try:
@@ -217,12 +217,12 @@ def format_signal_text(coin, buy_ex, sell_ex, p_buy, p_sell, buy_fee, sell_fee, 
         f"{overall_icon} **СТАТУС:** {overall_status}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"🟢 **ПОКУПКА: {buy_ex.upper()}**\n"
-        f"├ 💵 Цена: `{p_buy:.6f} USDT`\n"
+        f"├ 💵 Цена: `{p_buy:.8f} USDT`\n"
         f"├ 📊 Сумма: `${TRADE_SIZE_USD}`\n"
         f"└ 🔗 [Открыть пару]({link_buy})\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"🔴 **ПРОДАЖА: {sell_ex.upper()}**\n"
-        f"├ 💵 Цена: `{p_sell:.6f} USDT`\n"
+        f"├ 💵 Цена: `{p_sell:.8f} USDT`\n"
         f"└ 🔗 [Открыть пару]({link_sell})\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📦 **ОБЩАЯ СЕТЬ: {common_network['network']}**\n"
@@ -258,6 +258,7 @@ async def stats_command():
     stats_message += f"⛔️ Заблокировано сетей: {len(BLACKLIST_NETWORKS)}\n"
     stats_message += f"⏱ Макс. время вывода: {MAX_WITHDRAWAL_TIME_MIN} мин\n"
     stats_message += f"📊 Мин. объем: ${MIN_VOLUME_USD:,}\n"
+    stats_message += f"📈 Макс. спред: {MAX_SPREAD_PCT}%\n"
     stats_message += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
     
     stats_message += "🟢 **ТОП БИРЖ ДЛЯ ПОКУПКИ:**\n"
@@ -283,13 +284,14 @@ def run_telegram_bot():
         await update.message.reply_text(
             "✅ **Арбитражный бот запущен!**\n\n"
             "**Настройки безопасности:**\n"
+            f"✓ ПОЛНЫЙ перебор ВСЕХ бирж (а не только Top-3)\n"
             f"✓ Поиск по ВСЕМ монетам (объем от ${MIN_VOLUME_USD:,})\n"
+            f"✓ Максимальный спред до {MAX_SPREAD_PCT}%\n"
             f"✓ Проверка ОДИНАКОВЫХ сетей для вывода/депозита\n"
-            f"✓ Черный список проблемных сетей ({len(BLACKLIST_NETWORKS)} сетей)\n"
-            f"✓ Макс. время вывода: {MAX_WITHDRAWAL_TIME_MIN} мин\n\n"
+            f"✓ Черный список проблемных сетей ({len(BLACKLIST_NETWORKS)} сетей)\n\n"
             "**Команды:**\n"
             "📊 /stats - Статистика\n\n"
-            "✅ **Вывод и депозит ТОЛЬКО в одной сети!**"
+            "✅ **Теперь перебираются ВСЕ комбинации бирж!**"
         )
     
     async def stats_handler(update, context):
@@ -315,7 +317,9 @@ def run_telegram_bot():
 
 async def scan_all_markets():
     logger.info("⏳ Инициализация бирж...")
+    logger.info(f"✅ ПОЛНЫЙ перебор ВСЕХ комбинаций бирж (не только Top-3)")
     logger.info(f"✅ Поиск по ВСЕМ монетам с объемом от ${MIN_VOLUME_USD:,}")
+    logger.info(f"✅ Максимальный спред: {MAX_SPREAD_PCT}%")
     logger.info("✅ Включена проверка ОДИНАКОВЫХ сетей для вывода и депозита")
     
     exchanges = {}
@@ -349,7 +353,6 @@ async def scan_all_markets():
                         vol = float(t.get('quoteVolume') or 0)
                         bid = float(t.get('bid') or 0)
                         ask = float(t.get('ask') or 0)
-                        # Проверяем объем от MIN_VOLUME_USD (50к)
                         if vol >= MIN_VOLUME_USD and bid > 0 and ask > 0:
                             if sym not in all_tickers:
                                 all_tickers[sym] = {}
@@ -364,11 +367,18 @@ async def scan_all_markets():
 
         async def process_single_symbol(symbol, exchange_data):
             coin = symbol.split('/')[0]
-            buy_list = sorted([(eid, d['ask']) for eid, d in exchange_data.items()], key=lambda x: x[1])[:3]
-            sell_list = sorted([(eid, d['bid']) for eid, d in exchange_data.items()], key=lambda x: x[1], reverse=True)[:3]
             
-            for buy_ex, ask_p in buy_list:
-                for sell_ex, bid_p in sell_list:
+            # 🔥 ИСПРАВЛЕНИЕ 1: Берем ВСЕ биржи для покупки и продажи, а не только Top-3
+            buy_exchanges = [(eid, d['ask']) for eid, d in exchange_data.items()]
+            sell_exchanges = [(eid, d['bid']) for eid, d in exchange_data.items()]
+            
+            # Сортируем для оптимизации, но берем ВСЕ
+            buy_exchanges.sort(key=lambda x: x[1])  # По возрастанию цены (самые дешевые)
+            sell_exchanges.sort(key=lambda x: x[1], reverse=True)  # По убыванию цены (самые дорогие)
+            
+            # Перебираем ВСЕ комбинации
+            for buy_ex, ask_p in buy_exchanges:
+                for sell_ex, bid_p in sell_exchanges:
                     if buy_ex == sell_ex: 
                         continue
                     
@@ -417,11 +427,9 @@ async def scan_all_markets():
                                             logger.info(f"✅ Найдена общая сеть {net_name} для {coin} на {buy_ex} и {sell_ex}")
                             
                     except Exception as e:
-                        logger.error(f"Ошибка поиска общих сетей для {coin}: {e}")
                         continue
                     
                     if not common_networks:
-                        logger.info(f"❌ НЕТ ОБЩИХ СЕТЕЙ для {coin} между {buy_ex} и {sell_ex}! Пропускаем.")
                         continue
                     
                     common_networks.sort(key=lambda x: x['total_fee'])
