@@ -80,7 +80,7 @@ NETWORKS_INFO = {
 exchange_stats = defaultdict(lambda: {'buy_count': 0, 'sell_count': 0, 'total_profit': 0})
 detected_candidates = {} 
 active_spreads = {}      
-spread_last_seen = {}    # Храним время последнего появления спреда
+spread_last_seen = {}    
 
 bot = Bot(token=TELEGRAM_TOKEN)
 
@@ -140,50 +140,69 @@ async def get_order_book_depth(exchange, symbol, side, amount_usd):
     except Exception as e:
         return None, 0, 0
 
-async def check_withdrawal_network(exchange, coin):
+async def check_transfer_status(exchange, coin, transfer_type):
     """
-    Проверяет реальный статус вывода монеты с биржи
-    Возвращает None если вывод закрыт, иначе информацию о сети
+    Проверяет статус вывода или депозита монеты на бирже
+    transfer_type: 'withdraw' или 'deposit'
+    Возвращает None если операция закрыта, иначе информацию о сети
     """
     try:
-        # Пытаемся получить актуальную информацию о валюте через fetch_currencies
         if hasattr(exchange, 'fetch_currencies'):
             currencies = await exchange.fetch_currencies()
             
             if coin in currencies:
                 currency_info = currencies[coin]
                 
-                # Проверяем статус вывода в целом для монеты
-                withdraw_enabled = currency_info.get('withdraw', False)
-                deposit_enabled = currency_info.get('deposit', False)
+                # Проверяем статус в зависимости от типа
+                if transfer_type == 'withdraw':
+                    is_enabled = currency_info.get('withdraw', False)
+                    action_name = "ВЫВОД"
+                    action_icon = "📤"
+                    opposite_action = "депозит"
+                else:
+                    is_enabled = currency_info.get('deposit', False)
+                    action_name = "ДЕПОЗИТ"
+                    action_icon = "📥"
+                    opposite_action = "вывод"
                 
-                logger.info(f"🔍 {exchange.id} {coin}: вывод={withdraw_enabled}, депозит={deposit_enabled}")
+                logger.info(f"🔍 {exchange.id} {coin}: {action_name} = {is_enabled}")
                 
-                if not withdraw_enabled:
-                    logger.warning(f"❌ Вывод {coin} полностью ЗАКРЫТ на {exchange.id}")
-                    return None  # Вывод закрыт полностью
+                if not is_enabled:
+                    logger.warning(f"❌ {action_name} {coin} ЗАКРЫТ на {exchange.id}")
+                    return None
                 
-                # Проверяем сети
+                # Проверяем конкретные сети
                 networks = currency_info.get('networks', {})
                 available_networks = []
                 
                 for net_name, net_info in networks.items():
-                    net_withdraw = net_info.get('withdraw', False)
-                    net_deposit = net_info.get('deposit', False)
+                    if transfer_type == 'withdraw':
+                        net_enabled = net_info.get('withdraw', False)
+                    else:
+                        net_enabled = net_info.get('deposit', False)
+                    
                     net_fee = net_info.get('fee', 0.5)
                     
-                    # Пропускаем сети с нулевой или очень маленькой комиссией (часто тестовые)
+                    # Пропускаем сети с нулевой комиссией (часто тестовые)
                     if net_fee == 0:
                         continue
                     
-                    if net_withdraw and net_deposit:
+                    if net_enabled:
+                        # Проверяем также противоположную операцию для этой сети
+                        if transfer_type == 'withdraw':
+                            opposite_enabled = net_info.get('deposit', False)
+                        else:
+                            opposite_enabled = net_info.get('withdraw', False)
+                        
                         available_networks.append({
                             'name': net_name,
-                            'fee': float(net_fee) if net_fee else 0.5
+                            'fee': float(net_fee) if net_fee else 0.5,
+                            'both_enabled': opposite_enabled,
+                            'opposite_status': opposite_enabled
                         })
-                        logger.info(f"  ✅ Доступна сеть {net_name} (комиссия: ${net_fee})")
+                        logger.info(f"  ✅ Доступна сеть {net_name} для {action_name} (комиссия: ${net_fee})")
                     else:
-                        logger.info(f"  ❌ Сеть {net_name}: вывод={net_withdraw}, депозит={net_deposit}")
+                        logger.info(f"  ❌ Сеть {net_name}: {action_name} = {net_enabled}")
                 
                 if available_networks:
                     # Выбираем сеть с минимальной комиссией
@@ -191,7 +210,11 @@ async def check_withdrawal_network(exchange, coin):
                     best_network = available_networks[0]
                     net_details = get_network_info(best_network['name'])
                     
-                    logger.info(f"✅ {exchange.id} {coin}: выбрана сеть {best_network['name']} с комиссией ${best_network['fee']:.4f}")
+                    # Определяем статус противоположной операции
+                    opposite_status_text = "✅ ОТКРЫТ" if best_network['opposite_status'] else "❌ ЗАКРЫТ"
+                    opposite_icon = "🟢" if best_network['opposite_status'] else "🔴"
+                    
+                    logger.info(f"✅ {exchange.id} {coin}: выбрана сеть {best_network['name']} для {action_name}")
                     
                     return {
                         'network': best_network['name'].upper(),
@@ -199,31 +222,52 @@ async def check_withdrawal_network(exchange, coin):
                         'time_min': net_details['time_min'],
                         'time_max': net_details['time_max'],
                         'speed_icon': net_details['speed'],
-                        'recommended': net_details.get('recommended', True),
-                        'withdraw_enabled': True
+                        'recommended': net_details.get('recommended', True) and best_network['both_enabled'],
+                        f'{transfer_type}_enabled': True,
+                        'both_ways': best_network['both_enabled'],
+                        'opposite_status': opposite_status_text,
+                        'opposite_icon': opposite_icon,
+                        'action_icon': action_icon,
+                        'action_name': action_name
                     }
                 else:
-                    logger.warning(f"❌ {exchange.id} {coin}: НЕТ ДОСТУПНЫХ СЕТЕЙ для вывода!")
+                    logger.warning(f"❌ {exchange.id} {coin}: НЕТ ДОСТУПНЫХ СЕТЕЙ для {action_name}!")
                     return None
             else:
                 logger.warning(f"⚠️ {exchange.id}: валюта {coin} не найдена в fetch_currencies")
-                # Возвращаем None, чтобы не рисковать с непроверенными монетами
-                return None
+                return {
+                    'network': '⚠️ НЕИЗВЕСТНО',
+                    'fee': 0,
+                    'time_min': 0,
+                    'time_max': 0,
+                    'speed_icon': '❓',
+                    'recommended': False,
+                    f'{transfer_type}_enabled': False,
+                    'both_ways': False,
+                    'opposite_status': '❓ НЕИЗВЕСТНО',
+                    'opposite_icon': '❓',
+                    'action_icon': '❓',
+                    'action_name': action_name if 'action_name' in locals() else transfer_type
+                }
         else:
             logger.warning(f"⚠️ {exchange.id} не поддерживает fetch_currencies")
-            # Для бирж без поддержки fetch_currencies - предупреждение, но не блокируем
             return {
-                'network': '⚠️ ПРОВЕРЬТЕ ВРУЧНУЮ ⚠️',
+                'network': '⚠️ ПРОВЕРЬТЕ ВРУЧНУЮ',
                 'fee': 0.5,
                 'time_min': 5,
                 'time_max': 15,
                 'speed_icon': '❓',
                 'recommended': False,
-                'withdraw_enabled': True
+                f'{transfer_type}_enabled': True,
+                'both_ways': False,
+                'opposite_status': '❓ НЕИЗВЕСТНО',
+                'opposite_icon': '❓',
+                'action_icon': '⚠️',
+                'action_name': transfer_type.upper()
             }
     except Exception as e:
-        logger.error(f"Ошибка проверки вывода {exchange.id} {coin}: {e}")
-        return None  # При ошибке не отправляем сигнал
+        logger.error(f"Ошибка проверки {transfer_type} {exchange.id} {coin}: {e}")
+        return None
 
 def generate_buy_link(exchange_id, symbol):
     coin = symbol.split('/')[0]
@@ -245,56 +289,89 @@ def generate_buy_link(exchange_id, symbol):
     }
     return base_urls.get(exchange_id, f"https://{exchange_id}.com/trade/{coin}_USDT")
 
-def format_signal_text(coin, buy_ex, sell_ex, p_buy, p_sell, buy_fee, sell_fee, net_info, net_profit, net_spread):
+def format_signal_text(coin, buy_ex, sell_ex, p_buy, p_sell, buy_fee, sell_fee, withdraw_info, deposit_info, net_profit, net_spread):
     link_buy = generate_buy_link(buy_ex, f"{coin}/USDT")
     link_sell = generate_buy_link(sell_ex, f"{coin}/USDT")
-    rec_icon = "✅ RECOMMENDED" if net_info.get('recommended', True) else "⚠️ EXPENSIVE NETWORK"
+    
+    # Определяем общий статус
+    if withdraw_info.get('both_ways', False) and deposit_info.get('both_ways', False):
+        overall_status = "✅ ПОЛНОСТЬЮ ГОТОВО"
+        overall_icon = "🟢"
+    elif withdraw_info.get('withdraw_enabled', False) and deposit_info.get('deposit_enabled', False):
+        overall_status = "⚠️ ТРЕБУЕТ ПРОВЕРКИ"
+        overall_icon = "🟡"
+    else:
+        overall_status = "❌ НЕ ГОТОВО"
+        overall_icon = "🔴"
     
     return (
         f"⚡️ **НАЙДЕН АРБИТРАЖНЫЙ СПРЕД: #{coin}** ⚡️\n"
-        f"⚠️ **ВАЖНО: РУКАМИ ПРОВЕРЯЙ ВВОД/ВЫВОД НА БИРЖАХ!**\n━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🟢 **ПОКУПКА: {buy_ex.upper()}**\n💵 Цена: `{p_buy:.4f} USDT`\n📊 Сумма: `${TRADE_SIZE_USD}`\n🔗 [Открыть пару на {buy_ex.upper()}]({link_buy})\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🔴 **ПРОДАЖА: {sell_ex.upper()}**\n💵 Цена: `{p_sell:.4f} USDT`\n🔗 [Открыть пару на {sell_ex.upper()}]({link_sell})\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📦 **СЕТЬ: {net_info['network']}**\n├ Комиссия сети: `${net_info['fee']:.2f}`\n└ Время перевода: `{net_info['time_min']}-{net_info['time_max']} мин`\n"
-        f"{net_info['speed_icon']} **{rec_icon}**\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"💸 **РАСХОДЫ НА КОМИССИИ:**\n├ Торговые: `${buy_fee + sell_fee:.2f}`\n└ Сеть: `${net_info['fee']:.2f}`\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"💎 **ЧИСТАЯ ДОХОДНОСТЬ:**\n💰 Профит: **+${net_profit:.2f}**\n📈 Спред: **{net_spread:.2f}%**"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"{overall_icon} **ОБЩИЙ СТАТУС:** {overall_status}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🟢 **ПОКУПКА: {buy_ex.upper()}**\n"
+        f"├ 💵 Цена: `{p_buy:.6f} USDT`\n"
+        f"├ 📊 Сумма: `${TRADE_SIZE_USD}`\n"
+        f"└ 🔗 [Открыть пару]({link_buy})\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🔴 **ПРОДАЖА: {sell_ex.upper()}**\n"
+        f"├ 💵 Цена: `{p_sell:.6f} USDT`\n"
+        f"└ 🔗 [Открыть пару]({link_sell})\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📦 **СТАТУС ОПЕРАЦИЙ:**\n"
+        f"┌── 📤 **ВЫВОД С {buy_ex.upper()}**\n"
+        f"│   ├ 🟢 Статус: **ОТКРЫТ**\n"
+        f"│   ├ 🌐 Сеть: `{withdraw_info['network']}`\n"
+        f"│   ├ 💰 Комиссия: `${withdraw_info['fee']:.4f}`\n"
+        f"│   ├ ⏱ Время: {withdraw_info['time_min']}-{withdraw_info['time_max']} мин\n"
+        f"│   └ 🔄 Обратный {withdraw_info['opposite_icon']}: {withdraw_info['opposite_status']}\n"
+        f"└── 📥 **ДЕПОЗИТ НА {sell_ex.upper()}**\n"
+        f"    ├ 🟢 Статус: **ОТКРЫТ**\n"
+        f"    ├ 🌐 Сеть: `{deposit_info['network']}`\n"
+        f"    ├ 💰 Комиссия: `${deposit_info['fee']:.4f}`\n"
+        f"    ├ ⏱ Время: {deposit_info['time_min']}-{deposit_info['time_max']} мин\n"
+        f"    └ 🔄 Обратный {deposit_info['opposite_icon']}: {deposit_info['opposite_status']}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"💸 **РАСЧЕТ КОМИССИЙ:**\n"
+        f"├ 📊 Торговые: `${buy_fee + sell_fee:.2f}`\n"
+        f"├ 📤 Вывод: `${withdraw_info['fee']:.2f}`\n"
+        f"└ 📥 Депозит: `${deposit_info['fee']:.2f}`\n"
+        f"├ ─────────────────\n"
+        f"└ **ИТОГО КОМИССИЙ: `${buy_fee + sell_fee + withdraw_info['fee'] + deposit_info['fee']:.2f}`**\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"💎 **ИТОГОВАЯ ПРИБЫЛЬ:**\n"
+        f"├ 📈 Чистый спред: **{net_spread:.2f}%**\n"
+        f"└ 💰 Чистый профит: **+${net_profit:.2f}**\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"{withdraw_info['speed_icon']} {deposit_info['speed_icon']} Скорость сети: {withdraw_info['speed_icon']}{deposit_info['speed_icon']}"
     )
 
 async def stats_command():
-    stats_message = "📊 **АРБИТРАЖНАЯ СТАТИСТИКА** 📊\n━━━━━━━━━━━━━━━━━━━━━━\n"
-    stats_message += f"Время выгрузки: {datetime.now().strftime('%H:%M:%S')}\n\n"
+    stats_message = "📊 **АРБИТРАЖНАЯ СТАТИСТИКА** 📊\n"
+    stats_message += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    stats_message += f"🕐 Время: {datetime.now().strftime('%H:%M:%S')}\n\n"
     
     total_opp = sum(s['buy_count'] + s['sell_count'] for s in exchange_stats.values())
     total_profit = sum(s['total_profit'] for s in exchange_stats.values())
     
-    stats_message += f"💎 Всего сигналов отправлено: **{total_opp}**\n"
-    stats_message += f"💰 Математический профит: **${total_profit:.2f}**\n━━━━━━━━━━━━━━━━━━━━━━\n"
+    stats_message += f"💎 Всего сигналов: **{total_opp}**\n"
+    stats_message += f"💰 Мат. профит: **${total_profit:.2f}**\n"
+    stats_message += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
     
     stats_message += "🟢 **ТОП БИРЖ ДЛЯ ПОКУПКИ:**\n"
-    top_buy = sorted(exchange_stats.items(), key=lambda x: x[1]['buy_count'], reverse=True)[:3]
-    has_buy_data = False
+    top_buy = sorted(exchange_stats.items(), key=lambda x: x[1]['buy_count'], reverse=True)[:5]
     for ex, data in top_buy:
         if data['buy_count'] > 0:
             stats_message += f" ├ {ex.upper()}: **{data['buy_count']}** раз(а)\n"
-            has_buy_data = True
-    if not has_buy_data: stats_message += " ├ Данные пока отсутствуют...\n"
-            
+    
     stats_message += "\n🔴 **ТОП БИРЖ ДЛЯ ПРОДАЖИ:**\n"
-    top_sell = sorted(exchange_stats.items(), key=lambda x: x[1]['sell_count'], reverse=True)[:3]
-    has_sell_data = False
+    top_sell = sorted(exchange_stats.items(), key=lambda x: x[1]['sell_count'], reverse=True)[:5]
     for ex, data in top_sell:
         if data['sell_count'] > 0:
             stats_message += f" ├ {ex.upper()}: **{data['sell_count']}** раз(а)\n"
-            has_sell_data = True
-    if not has_sell_data: stats_message += " ├ Данные пока отсутствуют...\n"
     
     stats_message += "\n🔄 **Активных спредов:** {}\n".format(len(active_spreads))
-    stats_message += "━━━━━━━━━━━━━━━━━━━━━━"
+    stats_message += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     return stats_message
 
 def run_telegram_bot():
@@ -302,10 +379,15 @@ def run_telegram_bot():
     
     async def start_handler(update, context):
         await update.message.reply_text(
-            "✅ Бот успешно запущен и сканирует биржи!\n\n"
-            "**Доступные команды:**\n"
-            "📊 /stats - развернутая статистика по биржам\n"
-            "🔄 Активные спреды автоматически удаляются при исчезновении"
+            "✅ **Арбитражный бот запущен!**\n\n"
+            "**Проверки:**\n"
+            "✓ Вывод с биржи покупки 📤\n"
+            "✓ Депозит на биржу продажи 📥\n"
+            "✓ Глубина стакана\n"
+            "✓ Торговые комиссии\n\n"
+            "**Команды:**\n"
+            "📊 /stats - Статистика\n\n"
+            "Статус каждой операции отображается в сигнале!"
         )
     
     async def stats_handler(update, context):
@@ -319,8 +401,10 @@ def run_telegram_bot():
         if query.data == 'refresh_stats':
             stats_text = await stats_command()
             keyboard = [[InlineKeyboardButton("🔄 Обновить статистику", callback_data='refresh_stats')]]
-            try: await query.edit_message_text(stats_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
-            except: pass
+            try: 
+                await query.edit_message_text(stats_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+            except: 
+                pass
             
     application.add_handler(CommandHandler("start", start_handler))
     application.add_handler(CommandHandler("stats", stats_handler))
@@ -336,12 +420,15 @@ async def scan_all_markets():
             config = {'enableRateLimit': True, 'timeout': 15000}
             if ex_id in EXCHANGE_KEYS:
                 config.update(EXCHANGE_KEYS[ex_id])
+            # Добавляем опции для некоторых бирж
+            if ex_id in ['binance', 'bybit', 'okx']:
+                config['options'] = {'defaultType': 'spot'}
             instance = ex_class(config)
             await instance.load_markets()
             exchanges[ex_id] = instance
-            logger.info(f"✅ Загружена биржа {ex_id}")
+            logger.info(f"✅ Загружена {ex_id}")
         except Exception as e:
-            logger.warning(f"⚠️ Не удалось загрузить {ex_id}: {e}")
+            logger.warning(f"⚠️ Не загружена {ex_id}: {e}")
 
     scan_count = 0
 
@@ -366,12 +453,12 @@ async def scan_all_markets():
                                 all_tickers[sym] = {}
                             all_tickers[sym][ex_id] = {'bid': bid, 'ask': ask, 'vol': vol}
             except Exception as e:
-                logger.debug(f"Ошибка загрузки тикеров {ex_id}: {e}")
+                pass
 
         await asyncio.gather(*[fetch_tickers_safe(eid, ex) for eid, ex in exchanges.items()])
         
         fresh_detected_keys = set()
-        logger.info(f"🔄 Сканирование {len(all_tickers)} торговых пар...")
+        logger.info(f"🔄 Сканирование {len(all_tickers)} пар...")
 
         async def process_single_symbol(symbol, exchange_data):
             coin = symbol.split('/')[0]
@@ -387,28 +474,29 @@ async def scan_all_markets():
                     if raw_spread < MIN_SPREAD_PCT or raw_spread > MAX_SPREAD_PCT: 
                         continue
                     
-                    # Проверяем вывод на бирже ПОКУПКИ
-                    net_info = await check_withdrawal_network(exchanges[buy_ex], coin)
-                    if net_info is None:
-                        logger.info(f"⏭️ Пропуск {coin}: вывод ЗАКРЫТ на {buy_ex}")
+                    # ПРОВЕРКА 1: Вывод с биржи покупки
+                    withdraw_info = await check_transfer_status(exchanges[buy_ex], coin, 'withdraw')
+                    if withdraw_info is None:
+                        logger.info(f"⏭️ {coin}: ВЫВОД ЗАКРЫТ на {buy_ex}")
+                        continue
+                    
+                    # ПРОВЕРКА 2: Депозит на биржу продажи
+                    deposit_info = await check_transfer_status(exchanges[sell_ex], coin, 'deposit')
+                    if deposit_info is None:
+                        logger.info(f"⏭️ {coin}: ДЕПОЗИТ ЗАКРЫТ на {sell_ex}")
                         continue
                     
                     spread_key = f"{coin}_{buy_ex}_{sell_ex}"
                     fresh_detected_keys.add(spread_key)
-                    
-                    # Обновляем время последнего появления спреда
                     spread_last_seen[spread_key] = current_time
                     
-                    # Если спред уже активен - пропускаем
                     if spread_key in active_spreads: 
                         continue
                     
-                    # Если спред в кандидатах и прошло меньше 120 секунд - ждем
                     if spread_key in detected_candidates:
                         if current_time - detected_candidates[spread_key] < 120:
                             continue
                     
-                    # Запоминаем как кандидата
                     if spread_key not in detected_candidates:
                         detected_candidates[spread_key] = current_time
                         continue
@@ -418,7 +506,7 @@ async def scan_all_markets():
                     p_sell, _, s_fee = await get_order_book_depth(exchanges[sell_ex], symbol, 'sell', TRADE_SIZE_USD)
                     
                     if p_buy and p_sell:
-                        total_fees = b_fee + s_fee + net_info['fee']
+                        total_fees = b_fee + s_fee + withdraw_info['fee'] + deposit_info['fee']
                         gross_profit = ((TRADE_SIZE_USD / p_buy) * p_sell - TRADE_SIZE_USD)
                         net_profit = gross_profit - total_fees
                         net_spread = (net_profit / TRADE_SIZE_USD) * 100
@@ -429,83 +517,67 @@ async def scan_all_markets():
                             exchange_stats[sell_ex]['sell_count'] += 1
                             exchange_stats[sell_ex]['total_profit'] += (net_profit / 2)
                             
-                            msg_text = format_signal_text(coin, buy_ex, sell_ex, p_buy, p_sell, b_fee, s_fee, net_info, net_profit, net_spread)
+                            msg_text = format_signal_text(coin, buy_ex, sell_ex, p_buy, p_sell, b_fee, s_fee, withdraw_info, deposit_info, net_profit, net_spread)
                             try:
                                 msg = await bot.send_message(chat_id=CHAT_ID, text=msg_text, parse_mode="Markdown", disable_web_page_preview=True)
                                 active_spreads[spread_key] = {
                                     "message_id": msg.message_id, 
                                     "coin": coin, 
                                     "buy_ex": buy_ex, 
-                                    "sell_ex": sell_ex, 
-                                    "net_info": net_info,
+                                    "sell_ex": sell_ex,
                                     "created_at": current_time
                                 }
                                 detected_candidates.pop(spread_key, None)
-                                logger.info(f"✅ ОТПРАВЛЕН СИГНАЛ: {coin} {buy_ex}→{sell_ex} | чистый спред: {net_spread:.2f}% | профит: ${net_profit:.2f}")
+                                logger.info(f"✅ СИГНАЛ: {coin} {buy_ex}→{sell_ex} | спред: {net_spread:.2f}% | профит: ${net_profit:.2f}")
                             except Exception as e:
-                                logger.error(f"Ошибка отправки сообщения: {e}")
+                                logger.error(f"Ошибка отправки: {e}")
 
-        # Обрабатываем пары чанками по 30
+        # Обрабатываем пары
         chunks = list(all_tickers.items())
         for i in range(0, len(chunks), 30):
             await asyncio.gather(*[process_single_symbol(sym, edata) for sym, edata in chunks[i:i+30]])
             await asyncio.sleep(0.05)
         
-        # ===== НОВАЯ ЛОГИКА УДАЛЕНИЯ СПРЕДОВ =====
-        # 1. Удаляем кандидатов, которые больше не видны
+        # Очистка устаревших данных
         for k in list(detected_candidates.keys()):
             if k not in fresh_detected_keys:
                 del detected_candidates[k]
-                logger.debug(f"🗑️ Удален кандидат {k}")
         
-        # 2. Проверяем активные спреды - если их нет в fresh_detected_keys более 30 секунд - удаляем
-        current_time = time.time()
+        # Удаление исчезнувших спредов
         spreads_to_remove = []
-        
         for spread_key, spread_data in list(active_spreads.items()):
-            # Если спред больше не виден на биржах
             if spread_key not in fresh_detected_keys:
-                # Проверяем, сколько времени его нет
                 last_seen = spread_last_seen.get(spread_key, 0)
-                if current_time - last_seen > 30:  # Прошло больше 30 секунд с момента последнего появления
+                if current_time - last_seen > 30:
                     spreads_to_remove.append(spread_key)
-                    logger.info(f"🗑️ Спред {spread_key} исчез с бирж, удаляем из бота")
             else:
-                # Спред все еще виден, обновляем время
                 spread_last_seen[spread_key] = current_time
         
-        # Удаляем исчезнувшие спреды
         for spread_key in spreads_to_remove:
             try:
                 spread_data = active_spreads.get(spread_key)
                 if spread_data:
-                    # Удаляем сообщение из Telegram
                     await bot.delete_message(chat_id=CHAT_ID, message_id=spread_data["message_id"])
-                    logger.info(f"✅ Удалено сообщение для {spread_data['coin']}")
-            except Exception as e:
-                logger.error(f"Ошибка удаления сообщения {spread_key}: {e}")
+                    logger.info(f"🗑️ Удален спред {spread_data['coin']}")
+            except:
+                pass
             finally:
                 active_spreads.pop(spread_key, None)
                 spread_last_seen.pop(spread_key, None)
                 detected_candidates.pop(spread_key, None)
         
-        # 3. Дополнительная очистка: удаляем спреды, которые живут слишком долго (больше 10 минут)
+        # Удаление слишком старых спредов (>10 минут)
         for spread_key, spread_data in list(active_spreads.items()):
-            if current_time - spread_data.get('created_at', current_time) > 600:  # 10 минут
+            if current_time - spread_data.get('created_at', current_time) > 600:
                 try:
                     await bot.delete_message(chat_id=CHAT_ID, message_id=spread_data["message_id"])
-                    logger.info(f"⏰ Принудительное удаление старого спреда {spread_key} (жил >10 мин)")
                 except:
                     pass
                 active_spreads.pop(spread_key, None)
                 spread_last_seen.pop(spread_key, None)
-                detected_candidates.pop(spread_key, None)
         
-        # Выводим статистику активных спредов
         if active_spreads:
-            logger.info(f"📊 Активных спредов в боте: {len(active_spreads)}")
-            for key, data in active_spreads.items():
-                logger.info(f"   - {data['coin']}: {data['buy_ex']}→{data['sell_ex']}")
+            logger.info(f"📊 Активных спредов: {len(active_spreads)}")
                     
         await asyncio.sleep(10)
 
