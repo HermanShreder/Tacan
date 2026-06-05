@@ -9,24 +9,24 @@ import time
 from datetime import datetime
 from collections import defaultdict
 
-# Логтау баптаулары
+# Настройки логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Telegram баптаулары (Жаңа токен қойылды)
+# Telegram настройки (Твой новый токен)
 TELEGRAM_TOKEN = "5814224378:AAHlkQ41I-uQ9XXe_jmn5G28Q2x6nXCVNM8"
 CHAT_ID = "5253808709"
 
-# Сауда баптаулары
+# Торговые настройки
 TRADE_SIZE_USD = 500
 MIN_SPREAD_PCT = 0.3
 MAX_SPREAD_PCT = 15.0   
 MIN_VOLUME_USD = 100000 
 
-# Монеталардың қара тізімі
+# Черный список монет
 BLACKLIST_COINS = {'KEY', 'STAR', 'BOND', 'MIRA', 'WILD', 'MAGIC', 'NATIVE'}
 
-# Биржалар тізімі
+# Список бирж
 EXCHANGES_LIST = [
     'binance', 'bybit', 'okx', 'gate', 'kucoin', 'bitget', 'mexc', 
     'bingx', 'htx', 'kraken', 'coinbase', 'huobi', 'poloniex', 
@@ -34,7 +34,7 @@ EXCHANGES_LIST = [
     'coinex', 'whitebit', 'bitrue', 'phemex'
 ]
 
-# Желілер туралы мәліметтер
+# Данные по сетям
 NETWORKS_INFO = {
     'SOL': {'name': 'Solana', 'time_min': 0.03, 'time_max': 0.08, 'fee': 0.0005, 'speed': '⚡️⚡️⚡️', 'risk': 'low', 'recommended': True},
     'XLM': {'name': 'Stellar', 'time_min': 0.05, 'time_max': 0.08, 'fee': 0.0001, 'speed': '⚡️⚡️⚡️', 'risk': 'low', 'recommended': True},
@@ -72,7 +72,7 @@ class HealthCheckServer(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-type", "text/html")
         self.end_headers()
-        self.wfile.write(b"Bot is running with the new token. Strict deletion mode active!")
+        self.wfile.write(b"Bot is running. Stable mode, 60s check intervals.")
 
 def run_health_server():
     try:
@@ -263,6 +263,8 @@ async def scan_all_markets():
         except: continue
 
     scan_count = 0
+    last_active_check = 0  # Таймер для контроля минутных проверок
+
     while True:
         scan_count += 1
         logger.info(f"🔄 Скан круг #{scan_count}... В телеграме висит {len(active_spreads)} спредов")
@@ -304,6 +306,7 @@ async def scan_all_markets():
                     spread_key = f"{coin}_{buy_ex}_{sell_ex}"
                     fresh_detected_keys.add(spread_key)
                     
+                    # ЕСЛИ СПРЕД УЖЕ ОПУБЛИКОВАН — СТРОГО ПРОПУСКАЕМ СБОР, НЕ ДУБЛИРУЕМ СИГНАЛ
                     if spread_key in active_spreads: continue
                     
                     if spread_key not in detected_candidates:
@@ -335,6 +338,8 @@ async def scan_all_markets():
                                 active_spreads[spread_key] = {
                                     "message_id": msg.message_id, "coin": coin, "buy_ex": buy_ex, "sell_ex": sell_ex, "net_info": net_info
                                 }
+                                # ФИКС СПАМА: Стираем кандидата, чтобы при удалении он не опубликовался мгновенно опять
+                                detected_candidates.pop(spread_key, None)
                             except: pass
 
         chunks = list(all_tickers.items())
@@ -346,43 +351,51 @@ async def scan_all_markets():
             if k not in fresh_detected_keys and k not in active_spreads:
                 del detected_candidates[k]
         
-        # ЕСКІРГЕН НЕМЕСЕ ӨЗЕКТІ ЕМЕС СПРЕДТЕРДІ ТЕЛЕГРАМНАН ӨШІРУ
-        for spread_id in list(active_spreads.keys()):
-            data = active_spreads[spread_id]
+        # ПРОВЕРКА АКТУАЛЬНОСТИ СУЩЕСТВУЮЩИХ СПРЕДОВ СТРОГО РАЗ В 60 СЕКУНД
+        if current_time - last_active_check >= 60:
+            last_active_check = current_time
+            logger.info("⏰ Запущена ежеминутная проверка активных спредов в стаканах...")
             
-            if spread_id not in fresh_detected_keys:
-                try: await bot.delete_message(chat_id=CHAT_ID, message_id=data["message_id"])
-                except: pass
-                del active_spreads[spread_id]
-                continue
+            for spread_id in list(active_spreads.keys()):
+                data = active_spreads[spread_id]
                 
-            buy_ex = data["buy_ex"]
-            sell_ex = data["sell_ex"]
-            symbol = f"{data['coin']}/USDT"
-            
-            try:
-                p_buy, _, b_fee = await get_order_book_depth(exchanges[buy_ex], symbol, 'buy', TRADE_SIZE_USD)
-                p_sell, _, s_fee = await get_order_book_depth(exchanges[sell_ex], symbol, 'sell', TRADE_SIZE_USD)
-                
-                still_alive = False
-                if p_buy and p_sell:
-                    total_fees = b_fee + s_fee + data["net_info"]['fee']
-                    gross_profit = ((TRADE_SIZE_USD / p_buy) * p_sell - TRADE_SIZE_USD)
-                    net_profit = gross_profit - total_fees
-                    net_spread = (net_profit / TRADE_SIZE_USD) * 100
-                    
-                    if MIN_SPREAD_PCT <= net_spread <= MAX_SPREAD_PCT:
-                        still_alive = True
-                        
-                # Егер спред шектен (0.3%) төмендесе, хабарлама бірден өшіріледі
-                if not still_alive:
+                # Если тикер пропал — сносим пост
+                if spread_id not in fresh_detected_keys:
                     try: await bot.delete_message(chat_id=CHAT_ID, message_id=data["message_id"])
                     except: pass
-                    del active_spreads[spread_id]
-            except:
-                try: await bot.delete_message(chat_id=CHAT_ID, message_id=data["message_id"])
-                except: pass
-                del active_spreads[spread_id]
+                    active_spreads.pop(spread_id, None)
+                    detected_candidates.pop(spread_id, None)
+                    continue
+                    
+                buy_ex = data["buy_ex"]
+                sell_ex = data["sell_ex"]
+                symbol = f"{data['coin']}/USDT"
+                
+                try:
+                    p_buy, _, b_fee = await get_order_book_depth(exchanges[buy_ex], symbol, 'buy', TRADE_SIZE_USD)
+                    p_sell, _, s_fee = await get_order_book_depth(exchanges[sell_ex], symbol, 'sell', TRADE_SIZE_USD)
+                    
+                    still_alive = False
+                    if p_buy and p_sell:
+                        total_fees = b_fee + s_fee + data["net_info"]['fee']
+                        gross_profit = ((TRADE_SIZE_USD / p_buy) * p_sell - TRADE_SIZE_USD)
+                        net_profit = gross_profit - total_fees
+                        net_spread = (net_profit / TRADE_SIZE_USD) * 100
+                        
+                        if MIN_SPREAD_PCT <= net_spread <= MAX_SPREAD_PCT:
+                            still_alive = True
+                            
+                    # Если спред сдулся — удаляем сообщение из чата и очищаем все упоминания
+                    if not still_alive:
+                        try: await bot.delete_message(chat_id=CHAT_ID, message_id=data["message_id"])
+                        except: pass
+                        active_spreads.pop(spread_id, None)
+                        detected_candidates.pop(spread_id, None)
+                except:
+                    try: await bot.delete_message(chat_id=CHAT_ID, message_id=data["message_id"])
+                    except: pass
+                    active_spreads.pop(spread_id, None)
+                    detected_candidates.pop(spread_id, None)
 
         await asyncio.sleep(10)
 
