@@ -9,24 +9,24 @@ import time
 from datetime import datetime
 from collections import defaultdict
 
-# Настройки логирования
+# Логтау баптаулары
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Telegram настройки
-TELEGRAM_TOKEN = "7930993307:AAHuIxRVgr9OD7ZP_D2dbrbEu-JGBdZSnc4"
+# Telegram баптаулары (Жаңа токен қойылды)
+TELEGRAM_TOKEN = "5814224378:AAHlkQ41I-uQ9XXe_jmn5G28Q2x6nXCVNM8"
 CHAT_ID = "5253808709"
 
-# Торговые настройки
+# Сауда баптаулары
 TRADE_SIZE_USD = 500
 MIN_SPREAD_PCT = 0.3
 MAX_SPREAD_PCT = 15.0   
 MIN_VOLUME_USD = 100000 
 
-# Черный список монет
+# Монеталардың қара тізімі
 BLACKLIST_COINS = {'KEY', 'STAR', 'BOND', 'MIRA', 'WILD', 'MAGIC', 'NATIVE'}
 
-# Список бирж
+# Биржалар тізімі
 EXCHANGES_LIST = [
     'binance', 'bybit', 'okx', 'gate', 'kucoin', 'bitget', 'mexc', 
     'bingx', 'htx', 'kraken', 'coinbase', 'huobi', 'poloniex', 
@@ -34,7 +34,7 @@ EXCHANGES_LIST = [
     'coinex', 'whitebit', 'bitrue', 'phemex'
 ]
 
-# Данные по сетям
+# Желілер туралы мәліметтер
 NETWORKS_INFO = {
     'SOL': {'name': 'Solana', 'time_min': 0.03, 'time_max': 0.08, 'fee': 0.0005, 'speed': '⚡️⚡️⚡️', 'risk': 'low', 'recommended': True},
     'XLM': {'name': 'Stellar', 'time_min': 0.05, 'time_max': 0.08, 'fee': 0.0001, 'speed': '⚡️⚡️⚡️', 'risk': 'low', 'recommended': True},
@@ -72,7 +72,7 @@ class HealthCheckServer(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-type", "text/html")
         self.end_headers()
-        self.wfile.write(b"Bot is running. No timers, strict deletion mode active!")
+        self.wfile.write(b"Bot is running with the new token. Strict deletion mode active!")
 
 def run_health_server():
     try:
@@ -171,7 +171,6 @@ def generate_buy_link(exchange_id, symbol):
     }
     return base_urls.get(exchange_id, f"https://{exchange_id}.com/trade/{coin}_USDT")
 
-# Убрал параметр lifetime_sec и строку со временем
 def format_signal_text(coin, buy_ex, sell_ex, p_buy, p_sell, buy_fee, sell_fee, net_info, net_profit, net_spread):
     link_buy = generate_buy_link(buy_ex, f"{coin}/USDT")
     link_sell = generate_buy_link(sell_ex, f"{coin}/USDT")
@@ -347,18 +346,16 @@ async def scan_all_markets():
             if k not in fresh_detected_keys and k not in active_spreads:
                 del detected_candidates[k]
         
-        # ЖЕСТКАЯ ПРОВЕРКА И УДАЛЕНИЕ СМЕРТНЫХ СПРЕДОВ ИЗ ТЕЛЕГРАМА
+        # ЕСКІРГЕН НЕМЕСЕ ӨЗЕКТІ ЕМЕС СПРЕДТЕРДІ ТЕЛЕГРАМНАН ӨШІРУ
         for spread_id in list(active_spreads.keys()):
             data = active_spreads[spread_id]
             
-            # Если тикеры схлопнулись — сразу удаляем
             if spread_id not in fresh_detected_keys:
                 try: await bot.delete_message(chat_id=CHAT_ID, message_id=data["message_id"])
                 except: pass
                 del active_spreads[spread_id]
                 continue
                 
-            # Если по тикерам зазор еще висит, жестко проверяем стакан
             buy_ex = data["buy_ex"]
             sell_ex = data["sell_ex"]
             symbol = f"{data['coin']}/USDT"
@@ -377,13 +374,12 @@ async def scan_all_markets():
                     if MIN_SPREAD_PCT <= net_spread <= MAX_SPREAD_PCT:
                         still_alive = True
                         
-                # Если стакан пустой или спред упал — безжалостно удаляем из канала
+                # Егер спред шектен (0.3%) төмендесе, хабарлама бірден өшіріледі
                 if not still_alive:
                     try: await bot.delete_message(chat_id=CHAT_ID, message_id=data["message_id"])
                     except: pass
                     del active_spreads[spread_id]
             except:
-                # Если биржа легла при проверке, удаляем на всякий случай
                 try: await bot.delete_message(chat_id=CHAT_ID, message_id=data["message_id"])
                 except: pass
                 del active_spreads[spread_id]
