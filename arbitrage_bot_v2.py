@@ -20,13 +20,13 @@ CHAT_ID = "5253808709"
 # Торговые настройки
 TRADE_SIZE_USD = 500
 MIN_SPREAD_PCT = 0.3
-MAX_SPREAD_PCT = 15.0   # Максимальный спред (защита от скама, делистингов и багов)
-MIN_VOLUME_USD = 100000 # Минимальный объем торгов за 24ч (защита от неликвида)
+MAX_SPREAD_PCT = 15.0   
+MIN_VOLUME_USD = 100000 
 
-# Черный список монет (токены-двойники, разные сети, проблемные активы)
+# Черный список монет
 BLACKLIST_COINS = {'KEY', 'STAR', 'BOND', 'MIRA', 'WILD', 'MAGIC', 'NATIVE'}
 
-# Список всех сканируемых бирж
+# Список бирж
 EXCHANGES_LIST = [
     'binance', 'bybit', 'okx', 'gate', 'kucoin', 'bitget', 'mexc', 
     'bingx', 'htx', 'kraken', 'coinbase', 'huobi', 'poloniex', 
@@ -61,20 +61,18 @@ NETWORKS_INFO = {
     'ETH': {'name': 'Ethereum', 'time_min': 1, 'time_max': 15, 'fee': 10.0, 'speed': '🔴', 'risk': 'medium', 'recommended': False},
 }
 
-# Хранилища данных
 exchange_stats = defaultdict(lambda: {'buy_count': 0, 'sell_count': 0, 'total_profit': 0})
 detected_candidates = {} 
 active_spreads = {}      
 
 bot = Bot(token=TELEGRAM_TOKEN)
 
-# Сервер для проверки работоспособности (Health Check)
 class HealthCheckServer(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.send_header("Content-type", "text/html")
         self.end_headers()
-        self.wfile.write(b"Arbitrage Bot is running flawlessly!")
+        self.wfile.write(b"Bot is running. No timers, strict deletion mode active!")
 
 def run_health_server():
     try:
@@ -89,7 +87,6 @@ def get_network_info(network_name):
             return info
     return {'name': network_name, 'time_min': 5, 'time_max': 15, 'fee': 0.5, 'speed': '❓', 'risk': 'unknown', 'recommended': False}
 
-# Умный обсчет стакана под конкретный объем в USD
 async def get_order_book_depth(exchange, symbol, side, amount_usd):
     try:
         orderbook = await exchange.fetch_order_book(symbol, limit=20)
@@ -126,7 +123,6 @@ async def get_order_book_depth(exchange, symbol, side, amount_usd):
     except:
         return None, 0, 0
 
-# Проверка доступности вывода и поиск лучшей сети
 async def check_withdrawal_network(exchange, coin):
     try:
         if hasattr(exchange, 'currencies') and exchange.currencies and coin in exchange.currencies:
@@ -175,13 +171,10 @@ def generate_buy_link(exchange_id, symbol):
     }
     return base_urls.get(exchange_id, f"https://{exchange_id}.com/trade/{coin}_USDT")
 
-def format_signal_text(coin, buy_ex, sell_ex, p_buy, p_sell, buy_fee, sell_fee, net_info, net_profit, net_spread, lifetime_sec):
+# Убрал параметр lifetime_sec и строку со временем
+def format_signal_text(coin, buy_ex, sell_ex, p_buy, p_sell, buy_fee, sell_fee, net_info, net_profit, net_spread):
     link_buy = generate_buy_link(buy_ex, f"{coin}/USDT")
     link_sell = generate_buy_link(sell_ex, f"{coin}/USDT")
-    
-    mins = lifetime_sec // 60
-    secs = lifetime_sec % 60
-    lifetime_str = f"{mins}м {secs}с" if mins > 0 else f"{secs}с"
     rec_icon = "RECOMMENDED" if net_info.get('recommended', True) else "EXPENSIVE NETWORK"
     
     return (
@@ -196,37 +189,9 @@ def format_signal_text(coin, buy_ex, sell_ex, p_buy, p_sell, buy_fee, sell_fee, 
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"💸 **РАСХОДЫ НА КОМИССИИ:**\n├ Торговые: `${buy_fee + sell_fee:.2f}`\n└ Сеть: `${net_info['fee']:.2f}`\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"💎 **ЧИСТАЯ ДОХОДНОСТЬ:**\n💰 Профит: **+${net_profit:.2f}**\n📈 Спред: **{net_spread:.2f}%**\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"⏳ **ВРЕМЯ ЖИЗНИ СПРЕДА: {lifetime_str}**\n🔄 *Обновление счетчика каждые 15 секунд...*"
+        f"💎 **ЧИСТАЯ ДОХОДНОСТЬ:**\n💰 Профит: **+${net_profit:.2f}**\n📈 Спред: **{net_spread:.2f}%**"
     )
 
-# ИЗОЛИРОВАННЫЙ ТАЙМЕР-АПДЕЙТЕР (Крутится сам по себе, обновляет только цифры секунд в ТГ)
-async def independent_timer_updater():
-    await asyncio.sleep(5)  # Задержка на запуск
-    while True:
-        current_time = time.time()
-        for spread_id, data in list(active_spreads.items()):
-            try:
-                lifetime_sec = int(current_time - data["start_time"])
-                updated_text = format_signal_text(
-                    data["coin"], data["buy_ex"], data["sell_ex"], 
-                    data["p_buy"], data["p_sell"], data["b_fee"], data["s_fee"], 
-                    data["net_info"], data["net_profit"], data["net_spread"], lifetime_sec
-                )
-                await bot.edit_message_text(
-                    chat_id=CHAT_ID, message_id=data["message_id"], 
-                    text=updated_text, parse_mode="Markdown", disable_web_page_preview=True
-                )
-                await asyncio.sleep(0.5)  # Безопасная пауза ТОЛЬКО при успешном редактировании
-            except Exception as e:
-                if "Message to edit not found" in str(e) or "message is not modified" in str(e):
-                    pass
-                else:
-                    logger.error(f"Timer error: {e}")
-        await asyncio.sleep(15)  # Проходимся по всем постам раз в 15 секунд
-
-# Форматирование и выдача расширенной статистики
 async def stats_command():
     stats_message = "📊 **АРБИТРАЖНАЯ СТАТИСТИКА** 📊\n━━━━━━━━━━━━━━━━━━━━━━\n"
     stats_message += f"Время выгрузки: {datetime.now().strftime('%H:%M:%S')}\n\n"
@@ -237,7 +202,6 @@ async def stats_command():
     stats_message += f"💎 Всего сигналов поймано: **{total_opp}**\n"
     stats_message += f"💰 Математический профит: **${total_profit:.2f}**\n━━━━━━━━━━━━━━━━━━━━━━\n"
     
-    # Сортируем и выводим ТОП бирж для ПОКУПКИ
     stats_message += "🟢 **ТОП БИРЖ ДЛЯ ПОКУПКИ:**\n"
     top_buy = sorted(exchange_stats.items(), key=lambda x: x[1]['buy_count'], reverse=True)[:3]
     has_buy_data = False
@@ -248,7 +212,6 @@ async def stats_command():
     if not has_buy_data: stats_message += " ├ Данные пока отсутствуют...\n"
             
     stats_message += "\n🔴 **ТОП БИРЖ ДЛЯ ПРОДАЖИ:**\n"
-    # Сортируем и выводим ТОП бирж для ПРОДАЖИ
     top_sell = sorted(exchange_stats.items(), key=lambda x: x[1]['sell_count'], reverse=True)[:3]
     has_sell_data = False
     for ex, data in top_sell:
@@ -260,7 +223,6 @@ async def stats_command():
     stats_message += "━━━━━━━━━━━━━━━━━━━━━━"
     return stats_message
 
-# Запуск Телеграм-клиента и регистрация команд
 def run_telegram_bot():
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     
@@ -290,7 +252,6 @@ def run_telegram_bot():
     application.add_handler(CallbackQueryHandler(button_handler))
     application.run_polling(allowed_updates=['message', 'callback_query'])
 
-# Основной цикл сканирования
 async def scan_all_markets():
     logger.info("⏳ Инициализация бирж (выполняется один раз при старте)...")
     exchanges = {}
@@ -302,13 +263,10 @@ async def scan_all_markets():
             exchanges[ex_id] = instance
         except: continue
 
-    # Запускаем независимый фоновый апдейтер таймера
-    asyncio.create_task(independent_timer_updater())
-
     scan_count = 0
     while True:
         scan_count += 1
-        logger.info(f"🔄 Скан круг #{scan_count}... Активных постов в ТГ: {len(active_spreads)}")
+        logger.info(f"🔄 Скан круг #{scan_count}... В телеграме висит {len(active_spreads)} спредов")
         all_tickers = {}
         current_time = time.time()
 
@@ -372,14 +330,11 @@ async def scan_all_markets():
                             exchange_stats[sell_ex]['sell_count'] += 1
                             exchange_stats[sell_ex]['total_profit'] += (net_profit / 2)
                             
-                            msg_text = format_signal_text(coin, buy_ex, sell_ex, p_buy, p_sell, b_fee, s_fee, net_info, net_profit, net_spread, 0)
+                            msg_text = format_signal_text(coin, buy_ex, sell_ex, p_buy, p_sell, b_fee, s_fee, net_info, net_profit, net_spread)
                             try:
                                 msg = await bot.send_message(chat_id=CHAT_ID, text=msg_text, parse_mode="Markdown", disable_web_page_preview=True)
                                 active_spreads[spread_key] = {
-                                    "message_id": msg.message_id, "start_time": time.time(),
-                                    "coin": coin, "buy_ex": buy_ex, "sell_ex": sell_ex,
-                                    "p_buy": p_buy, "p_sell": p_sell, "b_fee": b_fee, "s_fee": s_fee,
-                                    "net_info": net_info, "net_profit": net_profit, "net_spread": net_spread
+                                    "message_id": msg.message_id, "coin": coin, "buy_ex": buy_ex, "sell_ex": sell_ex, "net_info": net_info
                                 }
                             except: pass
 
@@ -392,13 +347,47 @@ async def scan_all_markets():
             if k not in fresh_detected_keys and k not in active_spreads:
                 del detected_candidates[k]
         
-        # Логика чистки (удаляем сообщение, если спред исчез из стаканов)
+        # ЖЕСТКАЯ ПРОВЕРКА И УДАЛЕНИЕ СМЕРТНЫХ СПРЕДОВ ИЗ ТЕЛЕГРАМА
         for spread_id in list(active_spreads.keys()):
+            data = active_spreads[spread_id]
+            
+            # Если тикеры схлопнулись — сразу удаляем
             if spread_id not in fresh_detected_keys:
-                try: await bot.delete_message(chat_id=CHAT_ID, message_id=active_spreads[spread_id]["message_id"])
+                try: await bot.delete_message(chat_id=CHAT_ID, message_id=data["message_id"])
                 except: pass
                 del active_spreads[spread_id]
+                continue
+                
+            # Если по тикерам зазор еще висит, жестко проверяем стакан
+            buy_ex = data["buy_ex"]
+            sell_ex = data["sell_ex"]
+            symbol = f"{data['coin']}/USDT"
             
+            try:
+                p_buy, _, b_fee = await get_order_book_depth(exchanges[buy_ex], symbol, 'buy', TRADE_SIZE_USD)
+                p_sell, _, s_fee = await get_order_book_depth(exchanges[sell_ex], symbol, 'sell', TRADE_SIZE_USD)
+                
+                still_alive = False
+                if p_buy and p_sell:
+                    total_fees = b_fee + s_fee + data["net_info"]['fee']
+                    gross_profit = ((TRADE_SIZE_USD / p_buy) * p_sell - TRADE_SIZE_USD)
+                    net_profit = gross_profit - total_fees
+                    net_spread = (net_profit / TRADE_SIZE_USD) * 100
+                    
+                    if MIN_SPREAD_PCT <= net_spread <= MAX_SPREAD_PCT:
+                        still_alive = True
+                        
+                # Если стакан пустой или спред упал — безжалостно удаляем из канала
+                if not still_alive:
+                    try: await bot.delete_message(chat_id=CHAT_ID, message_id=data["message_id"])
+                    except: pass
+                    del active_spreads[spread_id]
+            except:
+                # Если биржа легла при проверке, удаляем на всякий случай
+                try: await bot.delete_message(chat_id=CHAT_ID, message_id=data["message_id"])
+                except: pass
+                del active_spreads[spread_id]
+
         await asyncio.sleep(10)
 
 if __name__ == '__main__':
