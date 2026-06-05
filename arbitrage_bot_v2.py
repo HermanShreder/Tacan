@@ -38,43 +38,30 @@ TRADE_SIZE_USD = 500
 MIN_SPREAD_PCT = 0.3
 MAX_SPREAD_PCT = 15.0   
 MIN_VOLUME_USD = 100000 
+MAX_WITHDRAWAL_TIME_MIN = 30
 
 # Черный список монет
 BLACKLIST_COINS = {'KEY', 'STAR', 'BOND', 'MIRA', 'WILD', 'MAGIC', 'NATIVE'}
 
-# Список бирж
-EXCHANGES_LIST = [
-    'binance', 'bybit', 'okx', 'gate', 'kucoin', 'bitget', 'mexc', 
-    'bingx', 'htx', 'kraken', 'coinbase', 'huobi', 'poloniex', 
-    'hitbtc', 'exmo', 'bitfinex', 'bitmart', 'lbank', 'ascendex',
-    'coinex', 'whitebit', 'bitrue', 'phemex'
-]
+# Черный список проблемных сетей
+BLACKLIST_NETWORKS = {
+    'BSV': {'reason': 'очень долгий вывод (более суток)', 'max_time': 1440},
+    'BTC': {'reason': 'медленная сеть', 'max_time': 120},
+    'BCH': {'reason': 'нестабильные выводы', 'max_time': 180},
+}
 
 # Данные по сетям
 NETWORKS_INFO = {
-    'SOL': {'name': 'Solana', 'time_min': 0.03, 'time_max': 0.08, 'fee': 0.0005, 'speed': '⚡️⚡️⚡️', 'risk': 'low', 'recommended': True},
-    'XLM': {'name': 'Stellar', 'time_min': 0.05, 'time_max': 0.08, 'fee': 0.0001, 'speed': '⚡️⚡️⚡️', 'risk': 'low', 'recommended': True},
-    'XRP': {'name': 'Ripple', 'time_min': 0.07, 'time_max': 0.17, 'fee': 0.0005, 'speed': '⚡️⚡️⚡️', 'risk': 'low', 'recommended': True},
-    'ALGO': {'name': 'Algorand', 'time_min': 0.07, 'time_max': 0.08, 'fee': 0.0005, 'speed': '⚡️⚡️⚡️', 'risk': 'low', 'recommended': True},
-    'NEAR': {'name': 'NEAR Protocol', 'time_min': 0.03, 'time_max': 0.08, 'fee': 0.0005, 'speed': '⚡️⚡️⚡️', 'risk': 'low', 'recommended': True},
-    'APT': {'name': 'Aptos', 'time_min': 0.02, 'time_max': 0.05, 'fee': 0.0005, 'speed': '⚡️⚡️⚡️⚡️', 'risk': 'low', 'recommended': True},
-    'SUI': {'name': 'Sui', 'time_min': 0.02, 'time_max': 0.05, 'fee': 0.0005, 'speed': '⚡️⚡️⚡️⚡️', 'risk': 'low', 'recommended': True},
-    'FTM': {'name': 'Fantom', 'time_min': 0.02, 'time_max': 0.05, 'fee': 0.001, 'speed': '⚡️⚡️⚡️', 'risk': 'low', 'recommended': True},
-    'AVAX': {'name': 'Avalanche C-Chain', 'time_min': 0.03, 'time_max': 0.08, 'fee': 0.05, 'speed': '⚡️⚡️', 'risk': 'medium', 'recommended': True},
-    'HBAR': {'name': 'Hedera', 'time_min': 0.05, 'time_max': 0.08, 'fee': 0.0001, 'speed': '⚡️⚡️⚡️', 'risk': 'low', 'recommended': True},
-    'MATIC': {'name': 'Polygon', 'time_min': 1, 'time_max': 3, 'fee': 0.02, 'speed': '🟢', 'risk': 'low', 'recommended': True},
-    'ARB': {'name': 'Arbitrum', 'time_min': 1, 'time_max': 2, 'fee': 0.02, 'speed': '🟢', 'risk': 'low', 'recommended': True},
-    'OP': {'name': 'Optimism', 'time_min': 1, 'time_max': 2, 'fee': 0.02, 'speed': '🟢', 'risk': 'low', 'recommended': True},
-    'BASE': {'name': 'Base', 'time_min': 1, 'time_max': 3, 'fee': 0.03, 'speed': '🟢', 'risk': 'low', 'recommended': True},
-    'BNB': {'name': 'BNB Smart Chain', 'time_min': 1, 'time_max': 3, 'fee': 0.15, 'speed': '🟢', 'risk': 'medium', 'recommended': True},
-    'TRX': {'name': 'Tron (TRC-20)', 'time_min': 1, 'time_max': 3, 'fee': 1.50, 'speed': '🟡', 'risk': 'medium', 'recommended': False},
-    'LTC': {'name': 'Litecoin', 'time_min': 5, 'time_max': 10, 'fee': 0.05, 'speed': '🟡', 'risk': 'medium', 'recommended': True},
-    'DOT': {'name': 'Polkadot', 'time_min': 0.17, 'time_max': 0.5, 'fee': 0.10, 'speed': '🟢', 'risk': 'low', 'recommended': True},
-    'ATOM': {'name': 'Cosmos', 'time_min': 0.08, 'time_max': 0.17, 'fee': 0.05, 'speed': '🟢', 'risk': 'low', 'recommended': True},
-    'TON': {'name': 'TON', 'time_min': 0.08, 'time_max': 0.17, 'fee': 0.20, 'speed': '🟢', 'risk': 'medium', 'recommended': True},
-    'ADA': {'name': 'Cardano', 'time_min': 2, 'time_max': 5, 'fee': 0.08, 'speed': '🟡', 'risk': 'low', 'recommended': True},
-    'BTC': {'name': 'Bitcoin', 'time_min': 10, 'time_max': 60, 'fee': 2.50, 'speed': '🔴', 'risk': 'low', 'recommended': False},
-    'ETH': {'name': 'Ethereum', 'time_min': 1, 'time_max': 15, 'fee': 10.0, 'speed': '🔴', 'risk': 'medium', 'recommended': False},
+    'SOL': {'name': 'Solana', 'time_min': 0.03, 'time_max': 0.08, 'fee': 0.0005, 'speed': '⚡️⚡️⚡️', 'risk': 'low', 'recommended': True, 'max_safe_time': 1},
+    'XLM': {'name': 'Stellar', 'time_min': 0.05, 'time_max': 0.08, 'fee': 0.0001, 'speed': '⚡️⚡️⚡️', 'risk': 'low', 'recommended': True, 'max_safe_time': 1},
+    'XRP': {'name': 'Ripple', 'time_min': 0.07, 'time_max': 0.17, 'fee': 0.0005, 'speed': '⚡️⚡️⚡️', 'risk': 'low', 'recommended': True, 'max_safe_time': 1},
+    'BEP20': {'name': 'BSC', 'time_min': 1, 'time_max': 3, 'fee': 0.02, 'speed': '🟢', 'risk': 'low', 'recommended': True, 'max_safe_time': 5},
+    'BSC': {'name': 'BSC', 'time_min': 1, 'time_max': 3, 'fee': 0.02, 'speed': '🟢', 'risk': 'low', 'recommended': True, 'max_safe_time': 5},
+    'ERC20': {'name': 'Ethereum', 'time_min': 5, 'time_max': 15, 'fee': 8.0, 'speed': '🟡', 'risk': 'medium', 'recommended': False, 'max_safe_time': 30},
+    'TRC20': {'name': 'Tron', 'time_min': 1, 'time_max': 3, 'fee': 1.50, 'speed': '🟢', 'risk': 'medium', 'recommended': True, 'max_safe_time': 5},
+    'MATIC': {'name': 'Polygon', 'time_min': 1, 'time_max': 3, 'fee': 0.02, 'speed': '🟢', 'risk': 'low', 'recommended': True, 'max_safe_time': 5},
+    'ARB': {'name': 'Arbitrum', 'time_min': 1, 'time_max': 2, 'fee': 0.02, 'speed': '🟢', 'risk': 'low', 'recommended': True, 'max_safe_time': 5},
+    'OP': {'name': 'Optimism', 'time_min': 1, 'time_max': 2, 'fee': 0.02, 'speed': '🟢', 'risk': 'low', 'recommended': True, 'max_safe_time': 5},
 }
 
 exchange_stats = defaultdict(lambda: {'buy_count': 0, 'sell_count': 0, 'total_profit': 0})
@@ -89,7 +76,7 @@ class HealthCheckServer(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-type", "text/html")
         self.end_headers()
-        self.wfile.write(b"Bot is running. Stable mode, 60s check intervals.")
+        self.wfile.write(b"Bot is running. Same network check enabled.")
 
 def run_health_server():
     try:
@@ -98,11 +85,45 @@ def run_health_server():
     except Exception as e:
         logger.error(f"Health server error: {e}")
 
+def is_network_blacklisted(network_name):
+    for blacklisted, info in BLACKLIST_NETWORKS.items():
+        if blacklisted.lower() in network_name.lower():
+            return True, info['reason'], info['max_time']
+    return False, None, None
+
 def get_network_info(network_name):
+    is_blacklisted, reason, max_time = is_network_blacklisted(network_name)
+    if is_blacklisted:
+        return {
+            'name': network_name, 
+            'time_min': 999, 
+            'time_max': 999, 
+            'fee': 999, 
+            'speed': '⛔️', 
+            'risk': 'critical', 
+            'recommended': False,
+            'blacklisted': True,
+            'blacklist_reason': reason,
+            'max_safe_time': max_time
+        }
+    
     for key, info in NETWORKS_INFO.items():
-        if key.lower() in network_name.lower() or info['name'].lower() in network_name.lower():
+        if key.upper() in network_name.upper() or info['name'].upper() in network_name.upper():
+            if info.get('max_safe_time', 30) > MAX_WITHDRAWAL_TIME_MIN:
+                return {**info, 'recommended': False, 'too_slow': True}
             return info
-    return {'name': network_name, 'time_min': 5, 'time_max': 15, 'fee': 0.5, 'speed': '❓', 'risk': 'unknown', 'recommended': False}
+    
+    return {
+        'name': network_name, 
+        'time_min': 30, 
+        'time_max': 60, 
+        'fee': 0.5, 
+        'speed': '❓', 
+        'risk': 'unknown', 
+        'recommended': False,
+        'unknown': True,
+        'max_safe_time': 60
+    }
 
 async def get_order_book_depth(exchange, symbol, side, amount_usd):
     try:
@@ -140,135 +161,6 @@ async def get_order_book_depth(exchange, symbol, side, amount_usd):
     except Exception as e:
         return None, 0, 0
 
-async def check_transfer_status(exchange, coin, transfer_type):
-    """
-    Проверяет статус вывода или депозита монеты на бирже
-    transfer_type: 'withdraw' или 'deposit'
-    Возвращает None если операция закрыта, иначе информацию о сети
-    """
-    try:
-        if hasattr(exchange, 'fetch_currencies'):
-            currencies = await exchange.fetch_currencies()
-            
-            if coin in currencies:
-                currency_info = currencies[coin]
-                
-                # Проверяем статус в зависимости от типа
-                if transfer_type == 'withdraw':
-                    is_enabled = currency_info.get('withdraw', False)
-                    action_name = "ВЫВОД"
-                    action_icon = "📤"
-                    opposite_action = "депозит"
-                else:
-                    is_enabled = currency_info.get('deposit', False)
-                    action_name = "ДЕПОЗИТ"
-                    action_icon = "📥"
-                    opposite_action = "вывод"
-                
-                logger.info(f"🔍 {exchange.id} {coin}: {action_name} = {is_enabled}")
-                
-                if not is_enabled:
-                    logger.warning(f"❌ {action_name} {coin} ЗАКРЫТ на {exchange.id}")
-                    return None
-                
-                # Проверяем конкретные сети
-                networks = currency_info.get('networks', {})
-                available_networks = []
-                
-                for net_name, net_info in networks.items():
-                    if transfer_type == 'withdraw':
-                        net_enabled = net_info.get('withdraw', False)
-                    else:
-                        net_enabled = net_info.get('deposit', False)
-                    
-                    net_fee = net_info.get('fee', 0.5)
-                    
-                    # Пропускаем сети с нулевой комиссией (часто тестовые)
-                    if net_fee == 0:
-                        continue
-                    
-                    if net_enabled:
-                        # Проверяем также противоположную операцию для этой сети
-                        if transfer_type == 'withdraw':
-                            opposite_enabled = net_info.get('deposit', False)
-                        else:
-                            opposite_enabled = net_info.get('withdraw', False)
-                        
-                        available_networks.append({
-                            'name': net_name,
-                            'fee': float(net_fee) if net_fee else 0.5,
-                            'both_enabled': opposite_enabled,
-                            'opposite_status': opposite_enabled
-                        })
-                        logger.info(f"  ✅ Доступна сеть {net_name} для {action_name} (комиссия: ${net_fee})")
-                    else:
-                        logger.info(f"  ❌ Сеть {net_name}: {action_name} = {net_enabled}")
-                
-                if available_networks:
-                    # Выбираем сеть с минимальной комиссией
-                    available_networks.sort(key=lambda x: x['fee'])
-                    best_network = available_networks[0]
-                    net_details = get_network_info(best_network['name'])
-                    
-                    # Определяем статус противоположной операции
-                    opposite_status_text = "✅ ОТКРЫТ" if best_network['opposite_status'] else "❌ ЗАКРЫТ"
-                    opposite_icon = "🟢" if best_network['opposite_status'] else "🔴"
-                    
-                    logger.info(f"✅ {exchange.id} {coin}: выбрана сеть {best_network['name']} для {action_name}")
-                    
-                    return {
-                        'network': best_network['name'].upper(),
-                        'fee': best_network['fee'],
-                        'time_min': net_details['time_min'],
-                        'time_max': net_details['time_max'],
-                        'speed_icon': net_details['speed'],
-                        'recommended': net_details.get('recommended', True) and best_network['both_enabled'],
-                        f'{transfer_type}_enabled': True,
-                        'both_ways': best_network['both_enabled'],
-                        'opposite_status': opposite_status_text,
-                        'opposite_icon': opposite_icon,
-                        'action_icon': action_icon,
-                        'action_name': action_name
-                    }
-                else:
-                    logger.warning(f"❌ {exchange.id} {coin}: НЕТ ДОСТУПНЫХ СЕТЕЙ для {action_name}!")
-                    return None
-            else:
-                logger.warning(f"⚠️ {exchange.id}: валюта {coin} не найдена в fetch_currencies")
-                return {
-                    'network': '⚠️ НЕИЗВЕСТНО',
-                    'fee': 0,
-                    'time_min': 0,
-                    'time_max': 0,
-                    'speed_icon': '❓',
-                    'recommended': False,
-                    f'{transfer_type}_enabled': False,
-                    'both_ways': False,
-                    'opposite_status': '❓ НЕИЗВЕСТНО',
-                    'opposite_icon': '❓',
-                    'action_icon': '❓',
-                    'action_name': action_name if 'action_name' in locals() else transfer_type
-                }
-        else:
-            logger.warning(f"⚠️ {exchange.id} не поддерживает fetch_currencies")
-            return {
-                'network': '⚠️ ПРОВЕРЬТЕ ВРУЧНУЮ',
-                'fee': 0.5,
-                'time_min': 5,
-                'time_max': 15,
-                'speed_icon': '❓',
-                'recommended': False,
-                f'{transfer_type}_enabled': True,
-                'both_ways': False,
-                'opposite_status': '❓ НЕИЗВЕСТНО',
-                'opposite_icon': '❓',
-                'action_icon': '⚠️',
-                'action_name': transfer_type.upper()
-            }
-    except Exception as e:
-        logger.error(f"Ошибка проверки {transfer_type} {exchange.id} {coin}: {e}")
-        return None
-
 def generate_buy_link(exchange_id, symbol):
     coin = symbol.split('/')[0]
     pair = symbol.replace('/', '')
@@ -289,23 +181,35 @@ def generate_buy_link(exchange_id, symbol):
     }
     return base_urls.get(exchange_id, f"https://{exchange_id}.com/trade/{coin}_USDT")
 
-def format_signal_text(coin, buy_ex, sell_ex, p_buy, p_sell, buy_fee, sell_fee, withdraw_info, deposit_info, net_profit, net_spread):
+def format_signal_text(coin, buy_ex, sell_ex, p_buy, p_sell, buy_fee, sell_fee, common_network, net_profit, net_spread):
     link_buy = generate_buy_link(buy_ex, f"{coin}/USDT")
     link_sell = generate_buy_link(sell_ex, f"{coin}/USDT")
     
-    # Определяем общий статус
-    if withdraw_info.get('both_ways', False) and deposit_info.get('both_ways', False):
-        overall_status = "✅ ПОЛНОСТЬЮ ГОТОВО"
-        overall_icon = "🟢"
-    elif withdraw_info.get('withdraw_enabled', False) and deposit_info.get('deposit_enabled', False):
-        overall_status = "⚠️ ТРЕБУЕТ ПРОВЕРКИ"
-        overall_icon = "🟡"
+    net_details = get_network_info(common_network['network'])
+    
+    # Определяем статус безопасности
+    if net_details.get('blacklisted', False):
+        overall_status = "⛔️ СЕТЬ В ЧЕРНОМ СПИСКЕ"
+        overall_icon = "⛔️"
+    elif net_details.get('too_slow', False):
+        overall_status = "🐌 СЛИШКОМ МЕДЛЕННАЯ СЕТЬ"
+        overall_icon = "🐌"
+    elif net_details.get('recommended', False):
+        overall_status = "✅ БЕЗОПАСНЫЙ АРБИТРАЖ"
+        overall_icon = "✅"
     else:
-        overall_status = "❌ НЕ ГОТОВО"
-        overall_icon = "🔴"
+        overall_status = "⚠️ ПРОВЕРЬТЕ СЕТЬ"
+        overall_icon = "⚠️"
+    
+    warning_text = ""
+    if net_details.get('too_slow', False):
+        warning_text = "\n⚠️ **ВНИМАНИЕ: МЕДЛЕННАЯ СЕТЬ!** ⚠️\nВывод может занять более 30 минут!\n"
+    elif net_details.get('blacklisted', False):
+        warning_text = "\n⛔️ **СЕТЬ В ЧЕРНОМ СПИСКЕ!** ⛔️\nБыли проблемы с выводами! НЕ РЕКОМЕНДУЕТСЯ!\n"
     
     return (
         f"⚡️ **НАЙДЕН АРБИТРАЖНЫЙ СПРЕД: #{coin}** ⚡️\n"
+        f"{warning_text}"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"{overall_icon} **ОБЩИЙ СТАТУС:** {overall_status}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -318,32 +222,25 @@ def format_signal_text(coin, buy_ex, sell_ex, p_buy, p_sell, buy_fee, sell_fee, 
         f"├ 💵 Цена: `{p_sell:.6f} USDT`\n"
         f"└ 🔗 [Открыть пару]({link_sell})\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📦 **СТАТУС ОПЕРАЦИЙ:**\n"
-        f"┌── 📤 **ВЫВОД С {buy_ex.upper()}**\n"
-        f"│   ├ 🟢 Статус: **ОТКРЫТ**\n"
-        f"│   ├ 🌐 Сеть: `{withdraw_info['network']}`\n"
-        f"│   ├ 💰 Комиссия: `${withdraw_info['fee']:.4f}`\n"
-        f"│   ├ ⏱ Время: {withdraw_info['time_min']}-{withdraw_info['time_max']} мин\n"
-        f"│   └ 🔄 Обратный {withdraw_info['opposite_icon']}: {withdraw_info['opposite_status']}\n"
-        f"└── 📥 **ДЕПОЗИТ НА {sell_ex.upper()}**\n"
-        f"    ├ 🟢 Статус: **ОТКРЫТ**\n"
-        f"    ├ 🌐 Сеть: `{deposit_info['network']}`\n"
-        f"    ├ 💰 Комиссия: `${deposit_info['fee']:.4f}`\n"
-        f"    ├ ⏱ Время: {deposit_info['time_min']}-{deposit_info['time_max']} мин\n"
-        f"    └ 🔄 Обратный {deposit_info['opposite_icon']}: {deposit_info['opposite_status']}\n"
+        f"📦 **ОБЩАЯ СЕТЬ: {common_network['network']}**\n"
+        f"├ 📤 Комиссия вывода ({buy_ex.upper()}): `${common_network['buy_fee']:.4f}`\n"
+        f"├ 📥 Комиссия депозита ({sell_ex.upper()}): `${common_network['sell_fee']:.4f}`\n"
+        f"├ ⏱ Время перевода: {net_details.get('time_min', 5)}-{net_details.get('time_max', 15)} мин\n"
+        f"└ 🏁 Скорость: {net_details.get('speed', '❓')}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"💸 **РАСЧЕТ КОМИССИЙ:**\n"
         f"├ 📊 Торговые: `${buy_fee + sell_fee:.2f}`\n"
-        f"├ 📤 Вывод: `${withdraw_info['fee']:.2f}`\n"
-        f"└ 📥 Депозит: `${deposit_info['fee']:.2f}`\n"
+        f"├ 📤 Вывод: `${common_network['buy_fee']:.2f}`\n"
+        f"└ 📥 Депозит: `${common_network['sell_fee']:.2f}`\n"
         f"├ ─────────────────\n"
-        f"└ **ИТОГО КОМИССИЙ: `${buy_fee + sell_fee + withdraw_info['fee'] + deposit_info['fee']:.2f}`**\n"
+        f"└ **ИТОГО: `${buy_fee + sell_fee + common_network['buy_fee'] + common_network['sell_fee']:.2f}`**\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"💎 **ИТОГОВАЯ ПРИБЫЛЬ:**\n"
         f"├ 📈 Чистый спред: **{net_spread:.2f}%**\n"
         f"└ 💰 Чистый профит: **+${net_profit:.2f}**\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"{withdraw_info['speed_icon']} {deposit_info['speed_icon']} Скорость сети: {withdraw_info['speed_icon']}{deposit_info['speed_icon']}"
+        f"✅ **Вывод и депозит в ОДНОЙ сети {common_network['network']}**\n"
+        f"⚠️ **Рекомендация:** {'Можно торговать' if net_details.get('recommended', False) else 'ТОЛЬКО если уверены в сети!'}"
     )
 
 async def stats_command():
@@ -356,7 +253,9 @@ async def stats_command():
     
     stats_message += f"💎 Всего сигналов: **{total_opp}**\n"
     stats_message += f"💰 Мат. профит: **${total_profit:.2f}**\n"
-    stats_message += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    stats_message += f"⛔️ Заблокировано сетей: {len(BLACKLIST_NETWORKS)}\n"
+    stats_message += f"⏱ Макс. время вывода: {MAX_WITHDRAWAL_TIME_MIN} мин\n"
+    stats_message += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
     
     stats_message += "🟢 **ТОП БИРЖ ДЛЯ ПОКУПКИ:**\n"
     top_buy = sorted(exchange_stats.items(), key=lambda x: x[1]['buy_count'], reverse=True)[:5]
@@ -370,7 +269,7 @@ async def stats_command():
         if data['sell_count'] > 0:
             stats_message += f" ├ {ex.upper()}: **{data['sell_count']}** раз(а)\n"
     
-    stats_message += "\n🔄 **Активных спредов:** {}\n".format(len(active_spreads))
+    stats_message += f"\n🔄 **Активных спредов:** {len(active_spreads)}\n"
     stats_message += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     return stats_message
 
@@ -380,14 +279,14 @@ def run_telegram_bot():
     async def start_handler(update, context):
         await update.message.reply_text(
             "✅ **Арбитражный бот запущен!**\n\n"
-            "**Проверки:**\n"
-            "✓ Вывод с биржи покупки 📤\n"
-            "✓ Депозит на биржу продажи 📥\n"
-            "✓ Глубина стакана\n"
-            "✓ Торговые комиссии\n\n"
+            "**Безопасность:**\n"
+            f"✓ Проверка ОДИНАКОВЫХ сетей для вывода/депозита\n"
+            f"✓ Черный список проблемных сетей ({len(BLACKLIST_NETWORKS)} сетей)\n"
+            f"✓ Макс. время вывода: {MAX_WITHDRAWAL_TIME_MIN} мин\n"
+            f"✓ Проверка ввода/вывода на биржах\n\n"
             "**Команды:**\n"
             "📊 /stats - Статистика\n\n"
-            "Статус каждой операции отображается в сигнале!"
+            "✅ **Теперь вывод и депозит ТОЛЬКО в одной сети!**"
         )
     
     async def stats_handler(update, context):
@@ -413,6 +312,8 @@ def run_telegram_bot():
 
 async def scan_all_markets():
     logger.info("⏳ Инициализация бирж...")
+    logger.info(f"✅ Включена проверка ОДИНАКОВЫХ сетей для вывода и депозита")
+    
     exchanges = {}
     for ex_id in EXCHANGES_LIST:
         try:
@@ -420,7 +321,6 @@ async def scan_all_markets():
             config = {'enableRateLimit': True, 'timeout': 15000}
             if ex_id in EXCHANGE_KEYS:
                 config.update(EXCHANGE_KEYS[ex_id])
-            # Добавляем опции для некоторых бирж
             if ex_id in ['binance', 'bybit', 'okx']:
                 config['options'] = {'defaultType': 'spot'}
             instance = ex_class(config)
@@ -430,10 +330,7 @@ async def scan_all_markets():
         except Exception as e:
             logger.warning(f"⚠️ Не загружена {ex_id}: {e}")
 
-    scan_count = 0
-
     while True:
-        scan_count += 1
         all_tickers = {}
         current_time = time.time()
 
@@ -474,19 +371,69 @@ async def scan_all_markets():
                     if raw_spread < MIN_SPREAD_PCT or raw_spread > MAX_SPREAD_PCT: 
                         continue
                     
-                    # ПРОВЕРКА 1: Вывод с биржи покупки
-                    withdraw_info = await check_transfer_status(exchanges[buy_ex], coin, 'withdraw')
-                    if withdraw_info is None:
-                        logger.info(f"⏭️ {coin}: ВЫВОД ЗАКРЫТ на {buy_ex}")
+                    # ========== КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: ИЩЕМ ОБЩИЕ СЕТИ ==========
+                    common_networks = []
+                    
+                    try:
+                        # Получаем данные о сетях с обеих бирж
+                        if hasattr(exchanges[buy_ex], 'fetch_currencies') and hasattr(exchanges[sell_ex], 'fetch_currencies'):
+                            currencies_buy = await exchanges[buy_ex].fetch_currencies()
+                            currencies_sell = await exchanges[sell_ex].fetch_currencies()
+                            
+                            if coin in currencies_buy and coin in currencies_sell:
+                                buy_networks = currencies_buy[coin].get('networks', {})
+                                sell_networks = currencies_sell[coin].get('networks', {})
+                                
+                                # Ищем ОДИНАКОВЫЕ сети
+                                for net_name, buy_net_info in buy_networks.items():
+                                    # На бирже покупки должен быть вывод
+                                    if not buy_net_info.get('withdraw', False):
+                                        continue
+                                    
+                                    buy_fee = float(buy_net_info.get('fee', 0.5))
+                                    if buy_fee == 0:
+                                        continue
+                                    
+                                    # Ищем такую же сеть на бирже продажи
+                                    for sell_net_name, sell_net_info in sell_networks.items():
+                                        # Сравниваем названия сетей (без учета регистра)
+                                        if net_name.upper() == sell_net_name.upper() or net_name.upper() in sell_net_name.upper() or sell_net_name.upper() in net_name.upper():
+                                            # На бирже продажи должен быть депозит
+                                            if not sell_net_info.get('deposit', False):
+                                                continue
+                                            
+                                            sell_fee = float(sell_net_info.get('fee', 0.5))
+                                            if sell_fee == 0:
+                                                continue
+                                            
+                                            # Проверяем черный список сетей
+                                            is_blacklisted, reason, _ = is_network_blacklisted(net_name)
+                                            if is_blacklisted:
+                                                logger.warning(f"⛔️ Пропускаем {coin}: сеть {net_name} в черном списке")
+                                                continue
+                                            
+                                            common_networks.append({
+                                                'network': net_name.upper(),
+                                                'buy_fee': buy_fee,
+                                                'sell_fee': sell_fee,
+                                                'total_fee': buy_fee + sell_fee
+                                            })
+                                            logger.info(f"✅ Найдена общая сеть {net_name} для {coin} на {buy_ex} и {sell_ex}")
+                            
+                    except Exception as e:
+                        logger.error(f"Ошибка при поиске общих сетей для {coin}: {e}")
                         continue
                     
-                    # ПРОВЕРКА 2: Депозит на биржу продажи
-                    deposit_info = await check_transfer_status(exchanges[sell_ex], coin, 'deposit')
-                    if deposit_info is None:
-                        logger.info(f"⏭️ {coin}: ДЕПОЗИТ ЗАКРЫТ на {sell_ex}")
+                    # Если нет общих сетей - ПРОПУСКАЕМ сигнал!
+                    if not common_networks:
+                        logger.info(f"❌ НЕТ ОБЩИХ СЕТЕЙ для {coin} между {buy_ex} и {sell_ex}! Пропускаем.")
                         continue
                     
-                    spread_key = f"{coin}_{buy_ex}_{sell_ex}"
+                    # Выбираем лучшую общую сеть (по сумме комиссий)
+                    common_networks.sort(key=lambda x: x['total_fee'])
+                    best_network = common_networks[0]
+                    
+                    spread_key = f"{coin}_{buy_ex}_{sell_ex}_{best_network['network']}"
                     fresh_detected_keys.add(spread_key)
                     spread_last_seen[spread_key] = current_time
                     
@@ -506,7 +453,7 @@ async def scan_all_markets():
                     p_sell, _, s_fee = await get_order_book_depth(exchanges[sell_ex], symbol, 'sell', TRADE_SIZE_USD)
                     
                     if p_buy and p_sell:
-                        total_fees = b_fee + s_fee + withdraw_info['fee'] + deposit_info['fee']
+                        total_fees = b_fee + s_fee + best_network['buy_fee'] + best_network['sell_fee']
                         gross_profit = ((TRADE_SIZE_USD / p_buy) * p_sell - TRADE_SIZE_USD)
                         net_profit = gross_profit - total_fees
                         net_spread = (net_profit / TRADE_SIZE_USD) * 100
@@ -517,7 +464,7 @@ async def scan_all_markets():
                             exchange_stats[sell_ex]['sell_count'] += 1
                             exchange_stats[sell_ex]['total_profit'] += (net_profit / 2)
                             
-                            msg_text = format_signal_text(coin, buy_ex, sell_ex, p_buy, p_sell, b_fee, s_fee, withdraw_info, deposit_info, net_profit, net_spread)
+                            msg_text = format_signal_text(coin, buy_ex, sell_ex, p_buy, p_sell, b_fee, s_fee, best_network, net_profit, net_spread)
                             try:
                                 msg = await bot.send_message(chat_id=CHAT_ID, text=msg_text, parse_mode="Markdown", disable_web_page_preview=True)
                                 active_spreads[spread_key] = {
@@ -525,10 +472,11 @@ async def scan_all_markets():
                                     "coin": coin, 
                                     "buy_ex": buy_ex, 
                                     "sell_ex": sell_ex,
+                                    "network": best_network['network'],
                                     "created_at": current_time
                                 }
                                 detected_candidates.pop(spread_key, None)
-                                logger.info(f"✅ СИГНАЛ: {coin} {buy_ex}→{sell_ex} | спред: {net_spread:.2f}% | профит: ${net_profit:.2f}")
+                                logger.info(f"✅ СИГНАЛ: {coin} {buy_ex}→{sell_ex} через {best_network['network']} | спред: {net_spread:.2f}% | профит: ${net_profit:.2f}")
                             except Exception as e:
                                 logger.error(f"Ошибка отправки: {e}")
 
@@ -558,7 +506,7 @@ async def scan_all_markets():
                 spread_data = active_spreads.get(spread_key)
                 if spread_data:
                     await bot.delete_message(chat_id=CHAT_ID, message_id=spread_data["message_id"])
-                    logger.info(f"🗑️ Удален спред {spread_data['coin']}")
+                    logger.info(f"🗑️ Удален спред {spread_data['coin']} ({spread_data['network']})")
             except:
                 pass
             finally:
