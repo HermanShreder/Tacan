@@ -13,9 +13,25 @@ from collections import defaultdict
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Telegram настройки (Твой новый токен)
+# Telegram настройки
 TELEGRAM_TOKEN = "5814224378:AAHlkQ41I-uQ9XXe_jmn5G28Q2x6nXCVNM8"
 CHAT_ID = "5253808709"
+
+# API КЛЮЧИ БИРЖ
+EXCHANGE_KEYS = {
+    'gate': {
+        'apiKey': '5d80677222f36e38d07d92f317e45674',
+        'secret': '1a4d3c051cb523364b540e87361435a096b20dc51d96df9a91eaf03c6ad55c13',
+    },
+    'huobi': {
+        'apiKey': '29d9fe7e-4b147f7f-dbuqg6hkte-0a894',
+        'secret': 'b0925bb5-07815986-b85bf68f-558a5',
+    },
+    'binance': {
+        'apiKey': 'UvxQH98mpFgMRLM0ImIhBBohS3Pl86hVzDifpOUbmkRbDje6nZ0d74bB6oJLSFKt',
+        'secret': 'C7LOcLQBBNsF8LWTabxy7sul8mC79pcsbEzlb518rnCE2O4FzejnvZa0j04ZoiEB',
+    }
+}
 
 # Торговые настройки
 TRADE_SIZE_USD = 500
@@ -252,22 +268,24 @@ def run_telegram_bot():
     application.run_polling(allowed_updates=['message', 'callback_query'])
 
 async def scan_all_markets():
-    logger.info("⏳ Инициализация бирж (выполняется один раз при старте)...")
+    logger.info("⏳ Инициализация бирж...")
     exchanges = {}
     for ex_id in EXCHANGES_LIST:
         try:
             ex_class = getattr(ccxt, ex_id)
-            instance = ex_class({'enableRateLimit': True, 'timeout': 15000})
+            config = {'enableRateLimit': True, 'timeout': 15000}
+            if ex_id in EXCHANGE_KEYS: config.update(EXCHANGE_KEYS[ex_id])
+            instance = ex_class(config)
             await instance.load_markets()
             exchanges[ex_id] = instance
-        except: continue
+        except Exception as e:
+            logger.warning(f"⚠️ Не удалось загрузить {ex_id}: {e}")
 
     scan_count = 0
-    last_active_check = 0  # Таймер для контроля минутных проверок
+    last_active_check = 0 
 
     while True:
         scan_count += 1
-        logger.info(f"🔄 Скан круг #{scan_count}... В телеграме висит {len(active_spreads)} спредов")
         all_tickers = {}
         current_time = time.time()
 
@@ -278,7 +296,6 @@ async def scan_all_markets():
                     if '/USDT' in sym and not sym.startswith('USDC'):
                         coin = sym.split('/')[0]
                         if coin in BLACKLIST_COINS: continue
-                        
                         vol = float(t.get('quoteVolume') or 0)
                         bid = float(t.get('bid') or 0)
                         ask = float(t.get('ask') or 0)
@@ -306,7 +323,6 @@ async def scan_all_markets():
                     spread_key = f"{coin}_{buy_ex}_{sell_ex}"
                     fresh_detected_keys.add(spread_key)
                     
-                    # ЕСЛИ СПРЕД УЖЕ ОПУБЛИКОВАН — СТРОГО ПРОПУСКАЕМ СБОР, НЕ ДУБЛИРУЕМ СИГНАЛ
                     if spread_key in active_spreads: continue
                     
                     if spread_key not in detected_candidates:
@@ -338,7 +354,6 @@ async def scan_all_markets():
                                 active_spreads[spread_key] = {
                                     "message_id": msg.message_id, "coin": coin, "buy_ex": buy_ex, "sell_ex": sell_ex, "net_info": net_info
                                 }
-                                # ФИКС СПАМА: Стираем кандидата, чтобы при удалении он не опубликовался мгновенно опять
                                 detected_candidates.pop(spread_key, None)
                             except: pass
 
@@ -351,15 +366,10 @@ async def scan_all_markets():
             if k not in fresh_detected_keys and k not in active_spreads:
                 del detected_candidates[k]
         
-        # ПРОВЕРКА АКТУАЛЬНОСТИ СУЩЕСТВУЮЩИХ СПРЕДОВ СТРОГО РАЗ В 60 СЕКУНД
         if current_time - last_active_check >= 60:
             last_active_check = current_time
-            logger.info("⏰ Запущена ежеминутная проверка активных спредов в стаканах...")
-            
             for spread_id in list(active_spreads.keys()):
                 data = active_spreads[spread_id]
-                
-                # Если тикер пропал — сносим пост
                 if spread_id not in fresh_detected_keys:
                     try: await bot.delete_message(chat_id=CHAT_ID, message_id=data["message_id"])
                     except: pass
@@ -367,36 +377,6 @@ async def scan_all_markets():
                     detected_candidates.pop(spread_id, None)
                     continue
                     
-                buy_ex = data["buy_ex"]
-                sell_ex = data["sell_ex"]
-                symbol = f"{data['coin']}/USDT"
-                
-                try:
-                    p_buy, _, b_fee = await get_order_book_depth(exchanges[buy_ex], symbol, 'buy', TRADE_SIZE_USD)
-                    p_sell, _, s_fee = await get_order_book_depth(exchanges[sell_ex], symbol, 'sell', TRADE_SIZE_USD)
-                    
-                    still_alive = False
-                    if p_buy and p_sell:
-                        total_fees = b_fee + s_fee + data["net_info"]['fee']
-                        gross_profit = ((TRADE_SIZE_USD / p_buy) * p_sell - TRADE_SIZE_USD)
-                        net_profit = gross_profit - total_fees
-                        net_spread = (net_profit / TRADE_SIZE_USD) * 100
-                        
-                        if MIN_SPREAD_PCT <= net_spread <= MAX_SPREAD_PCT:
-                            still_alive = True
-                            
-                    # Если спред сдулся — удаляем сообщение из чата и очищаем все упоминания
-                    if not still_alive:
-                        try: await bot.delete_message(chat_id=CHAT_ID, message_id=data["message_id"])
-                        except: pass
-                        active_spreads.pop(spread_id, None)
-                        detected_candidates.pop(spread_id, None)
-                except:
-                    try: await bot.delete_message(chat_id=CHAT_ID, message_id=data["message_id"])
-                    except: pass
-                    active_spreads.pop(spread_id, None)
-                    detected_candidates.pop(spread_id, None)
-
         await asyncio.sleep(10)
 
 if __name__ == '__main__':
