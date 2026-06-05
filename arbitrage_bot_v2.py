@@ -8,6 +8,7 @@ import threading
 import time
 from datetime import datetime
 from collections import defaultdict
+import json
 
 # Настройки логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -35,33 +36,61 @@ EXCHANGE_KEYS = {
 
 # Торговые настройки
 TRADE_SIZE_USD = 500
-MIN_SPREAD_PCT = 0.3
-MAX_SPREAD_PCT = 50.0  # Увеличено с 15% до 50%
+MIN_SPREAD_PCT = 0.5  # Минимальный спред 0.5%
+MAX_SPREAD_PCT = 200.0  # Максимальный спред до 200% (для шальных монет)
 MIN_VOLUME_USD = 50000
-MAX_WITHDRAWAL_TIME_MIN = 30
+MAX_WITHDRAWAL_TIME_MIN = 60  # Увеличил до 60 минут
 
 # Черный список монет
-BLACKLIST_COINS = {'KEY', 'STAR', 'BOND', 'MIRA', 'WILD', 'MAGIC', 'NATIVE'}
+BLACKLIST_COINS = {'KEY', 'STAR', 'BOND', 'MIRA', 'WILD', 'MAGIC', 'NATIVE', 'USDC', 'USDT', 'DAI'}
 
 # Черный список проблемных сетей
 BLACKLIST_NETWORKS = {
-    'BSV': {'reason': 'очень долгий вывод (более суток)', 'max_time': 1440},
-    'BTC': {'reason': 'медленная сеть', 'max_time': 120},
+    'BSV': {'reason': 'очень долгий вывод', 'max_time': 1440},
     'BCH': {'reason': 'нестабильные выводы', 'max_time': 180},
 }
 
-# Данные по сетям
+# Расширенная база данных сетей
 NETWORKS_INFO = {
+    # Быстрые сети (до 5 минут)
     'SOL': {'name': 'Solana', 'time_min': 0.03, 'time_max': 0.08, 'fee': 0.0005, 'speed': '⚡️⚡️⚡️', 'risk': 'low', 'recommended': True, 'max_safe_time': 1},
+    'SOLANA': {'name': 'Solana', 'time_min': 0.03, 'time_max': 0.08, 'fee': 0.0005, 'speed': '⚡️⚡️⚡️', 'risk': 'low', 'recommended': True, 'max_safe_time': 1},
     'XLM': {'name': 'Stellar', 'time_min': 0.05, 'time_max': 0.08, 'fee': 0.0001, 'speed': '⚡️⚡️⚡️', 'risk': 'low', 'recommended': True, 'max_safe_time': 1},
     'XRP': {'name': 'Ripple', 'time_min': 0.07, 'time_max': 0.17, 'fee': 0.0005, 'speed': '⚡️⚡️⚡️', 'risk': 'low', 'recommended': True, 'max_safe_time': 1},
-    'BEP20': {'name': 'BSC', 'time_min': 1, 'time_max': 3, 'fee': 0.02, 'speed': '🟢', 'risk': 'low', 'recommended': True, 'max_safe_time': 5},
-    'BSC': {'name': 'BSC', 'time_min': 1, 'time_max': 3, 'fee': 0.02, 'speed': '🟢', 'risk': 'low', 'recommended': True, 'max_safe_time': 5},
-    'ERC20': {'name': 'Ethereum', 'time_min': 5, 'time_max': 15, 'fee': 8.0, 'speed': '🟡', 'risk': 'medium', 'recommended': False, 'max_safe_time': 30},
-    'TRC20': {'name': 'Tron', 'time_min': 1, 'time_max': 3, 'fee': 1.50, 'speed': '🟢', 'risk': 'medium', 'recommended': True, 'max_safe_time': 5},
+    'ALGO': {'name': 'Algorand', 'time_min': 0.07, 'time_max': 0.08, 'fee': 0.0005, 'speed': '⚡️⚡️⚡️', 'risk': 'low', 'recommended': True, 'max_safe_time': 1},
+    'NEAR': {'name': 'NEAR Protocol', 'time_min': 0.03, 'time_max': 0.08, 'fee': 0.0005, 'speed': '⚡️⚡️⚡️', 'risk': 'low', 'recommended': True, 'max_safe_time': 1},
+    'APT': {'name': 'Aptos', 'time_min': 0.02, 'time_max': 0.05, 'fee': 0.0005, 'speed': '⚡️⚡️⚡️⚡️', 'risk': 'low', 'recommended': True, 'max_safe_time': 1},
+    'SUI': {'name': 'Sui', 'time_min': 0.02, 'time_max': 0.05, 'fee': 0.0005, 'speed': '⚡️⚡️⚡️⚡️', 'risk': 'low', 'recommended': True, 'max_safe_time': 1},
+    'FTM': {'name': 'Fantom', 'time_min': 0.02, 'time_max': 0.05, 'fee': 0.001, 'speed': '⚡️⚡️⚡️', 'risk': 'low', 'recommended': True, 'max_safe_time': 1},
+    'AVAX': {'name': 'Avalanche', 'time_min': 0.03, 'time_max': 0.08, 'fee': 0.05, 'speed': '⚡️⚡️', 'risk': 'medium', 'recommended': True, 'max_safe_time': 2},
+    'HBAR': {'name': 'Hedera', 'time_min': 0.05, 'time_max': 0.08, 'fee': 0.0001, 'speed': '⚡️⚡️⚡️', 'risk': 'low', 'recommended': True, 'max_safe_time': 1},
+    'DOT': {'name': 'Polkadot', 'time_min': 0.17, 'time_max': 0.5, 'fee': 0.10, 'speed': '🟢', 'risk': 'low', 'recommended': True, 'max_safe_time': 2},
+    'ATOM': {'name': 'Cosmos', 'time_min': 0.08, 'time_max': 0.17, 'fee': 0.05, 'speed': '🟢', 'risk': 'low', 'recommended': True, 'max_safe_time': 2},
+    'TON': {'name': 'TON', 'time_min': 0.08, 'time_max': 0.17, 'fee': 0.20, 'speed': '🟢', 'risk': 'medium', 'recommended': True, 'max_safe_time': 2},
+    
+    # Средние сети (5-15 минут)
+    'BEP20': {'name': 'BSC (BEP20)', 'time_min': 1, 'time_max': 3, 'fee': 0.02, 'speed': '🟢', 'risk': 'low', 'recommended': True, 'max_safe_time': 5},
+    'BSC': {'name': 'BSC (BEP20)', 'time_min': 1, 'time_max': 3, 'fee': 0.02, 'speed': '🟢', 'risk': 'low', 'recommended': True, 'max_safe_time': 5},
     'MATIC': {'name': 'Polygon', 'time_min': 1, 'time_max': 3, 'fee': 0.02, 'speed': '🟢', 'risk': 'low', 'recommended': True, 'max_safe_time': 5},
+    'POLYGON': {'name': 'Polygon', 'time_min': 1, 'time_max': 3, 'fee': 0.02, 'speed': '🟢', 'risk': 'low', 'recommended': True, 'max_safe_time': 5},
     'ARB': {'name': 'Arbitrum', 'time_min': 1, 'time_max': 2, 'fee': 0.02, 'speed': '🟢', 'risk': 'low', 'recommended': True, 'max_safe_time': 5},
+    'ARBITRUM': {'name': 'Arbitrum', 'time_min': 1, 'time_max': 2, 'fee': 0.02, 'speed': '🟢', 'risk': 'low', 'recommended': True, 'max_safe_time': 5},
     'OP': {'name': 'Optimism', 'time_min': 1, 'time_max': 2, 'fee': 0.02, 'speed': '🟢', 'risk': 'low', 'recommended': True, 'max_safe_time': 5},
+    'OPTIMISM': {'name': 'Optimism', 'time_min': 1, 'time_max': 2, 'fee': 0.02, 'speed': '🟢', 'risk': 'low', 'recommended': True, 'max_safe_time': 5},
+    'BASE': {'name': 'Base', 'time_min': 1, 'time_max': 3, 'fee': 0.03, 'speed': '🟢', 'risk': 'low', 'recommended': True, 'max_safe_time': 5},
+    'TRC20': {'name': 'Tron (TRC20)', 'time_min': 1, 'time_max': 3, 'fee': 1.50, 'speed': '🟢', 'risk': 'medium', 'recommended': True, 'max_safe_time': 5},
+    'TRX': {'name': 'Tron (TRC20)', 'time_min': 1, 'time_max': 3, 'fee': 1.50, 'speed': '🟢', 'risk': 'medium', 'recommended': True, 'max_safe_time': 5},
+    'BNB': {'name': 'BSC (BEP20)', 'time_min': 1, 'time_max': 3, 'fee': 0.15, 'speed': '🟢', 'risk': 'medium', 'recommended': True, 'max_safe_time': 5},
+    'LTC': {'name': 'Litecoin', 'time_min': 5, 'time_max': 10, 'fee': 0.05, 'speed': '🟡', 'risk': 'medium', 'recommended': True, 'max_safe_time': 15},
+    'ADA': {'name': 'Cardano', 'time_min': 2, 'time_max': 5, 'fee': 0.08, 'speed': '🟡', 'risk': 'low', 'recommended': True, 'max_safe_time': 10},
+    
+    # Медленные сети (более 15 минут)
+    'ERC20': {'name': 'Ethereum (ERC20)', 'time_min': 5, 'time_max': 15, 'fee': 8.0, 'speed': '🔴', 'risk': 'high', 'recommended': False, 'max_safe_time': 30},
+    'ETH': {'name': 'Ethereum (ERC20)', 'time_min': 5, 'time_max': 15, 'fee': 8.0, 'speed': '🔴', 'risk': 'high', 'recommended': False, 'max_safe_time': 30},
+    'BTC': {'name': 'Bitcoin', 'time_min': 10, 'time_max': 60, 'fee': 2.50, 'speed': '🔴', 'risk': 'high', 'recommended': False, 'max_safe_time': 120},
+    'BITCOIN': {'name': 'Bitcoin', 'time_min': 10, 'time_max': 60, 'fee': 2.50, 'speed': '🔴', 'risk': 'high', 'recommended': False, 'max_safe_time': 120},
+    'XMR': {'name': 'Monero', 'time_min': 10, 'time_max': 30, 'fee': 0.05, 'speed': '🟡', 'risk': 'medium', 'recommended': False, 'max_safe_time': 45},
+    'MONERO': {'name': 'Monero', 'time_min': 10, 'time_max': 30, 'fee': 0.05, 'speed': '🟡', 'risk': 'medium', 'recommended': False, 'max_safe_time': 45},
 }
 
 exchange_stats = defaultdict(lambda: {'buy_count': 0, 'sell_count': 0, 'total_profit': 0})
@@ -76,7 +105,7 @@ class HealthCheckServer(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-type", "text/html")
         self.end_headers()
-        self.wfile.write(b"Bot is running. Full search mode enabled.")
+        self.wfile.write(b"Bot is running. Full scan mode.")
 
 def run_health_server():
     try:
@@ -92,38 +121,42 @@ def is_network_blacklisted(network_name):
     return False, None, None
 
 def get_network_info(network_name):
-    is_blacklisted, reason, max_time = is_network_blacklisted(network_name)
-    if is_blacklisted:
-        return {
-            'name': network_name, 
-            'time_min': 999, 
-            'time_max': 999, 
-            'fee': 999, 
-            'speed': '⛔️', 
-            'risk': 'critical', 
-            'recommended': False,
-            'blacklisted': True,
-            'blacklist_reason': reason,
-            'max_safe_time': max_time
-        }
+    """Расширенный поиск информации о сети"""
+    network_upper = network_name.upper()
     
+    # Прямое совпадение
     for key, info in NETWORKS_INFO.items():
-        if key.upper() in network_name.upper() or info['name'].upper() in network_name.upper():
-            if info.get('max_safe_time', 30) > MAX_WITHDRAWAL_TIME_MIN:
-                return {**info, 'recommended': False, 'too_slow': True}
+        if key.upper() == network_upper:
+            is_blacklisted, reason, max_time = is_network_blacklisted(key)
+            if is_blacklisted:
+                return {**info, 'blacklisted': True, 'blacklist_reason': reason}
             return info
     
-    return {
+    # Частичное совпадение
+    for key, info in NETWORKS_INFO.items():
+        if key.upper() in network_upper or network_upper in key.upper():
+            is_blacklisted, reason, max_time = is_network_blacklisted(key)
+            if is_blacklisted:
+                return {**info, 'blacklisted': True, 'blacklist_reason': reason}
+            return info
+    
+    # Неизвестная сеть - логируем для добавления в базу
+    logger.warning(f"⚠️ Неизвестная сеть: {network_name}, добавляем в базу с дефолтными значениями")
+    
+    # Динамически добавляем неизвестную сеть
+    NETWORKS_INFO[network_upper] = {
         'name': network_name, 
-        'time_min': 30, 
-        'time_max': 60, 
+        'time_min': 5, 
+        'time_max': 15, 
         'fee': 0.5, 
         'speed': '❓', 
         'risk': 'unknown', 
         'recommended': False,
         'unknown': True,
-        'max_safe_time': 60
+        'max_safe_time': 30
     }
+    
+    return NETWORKS_INFO[network_upper]
 
 async def get_order_book_depth(exchange, symbol, side, amount_usd):
     try:
@@ -169,7 +202,7 @@ def generate_buy_link(exchange_id, symbol):
     coin = symbol.split('/')[0]
     pair = symbol.replace('/', '')
     base_urls = {
-        'binance': f"https://www.binance.com/en/trade/{coin}_USDT?type=spot",
+        'binance': f"https://www.binance.com/en/trade/{coin}_USDT",
         'bybit': f"https://www.bybit.com/trade/spot/{coin}/USDT",
         'okx': f"https://www.okx.com/trade-spot/{coin.lower()}-usdt",
         'gate': f"https://www.gate.io/trade/{coin}_USDT",
@@ -178,14 +211,15 @@ def generate_buy_link(exchange_id, symbol):
         'bitget': f"https://www.bitget.com/spot/{pair}",
         'kraken': f"https://trade.kraken.com/markets/kraken/{coin.lower()}/usdt",
         'coinbase': f"https://www.coinbase.com/advanced-trading/{coin}-USDT",
-        'huobi': f"https://www.huobi.com/en-us/exchange/{coin.lower()}_usdt",
+        'huobi': f"https://www.htx.com/trade/{coin.lower()}_usdt",
+        'htx': f"https://www.htx.com/trade/{coin.lower()}_usdt",
         'bingx': f"https://bingx.com/en/spot/{pair}",
         'bitmart': f"https://www.bitmart.com/trade/en?symbol={pair}",
         'phemex': f"https://phemex.com/trade/spot/{pair}",
     }
     return base_urls.get(exchange_id, f"https://{exchange_id}.com/trade/{coin}_USDT")
 
-def format_signal_text(coin, buy_ex, sell_ex, p_buy, p_sell, buy_fee, sell_fee, common_network, net_profit, net_spread):
+def format_signal_text(coin, buy_ex, sell_ex, p_buy, p_sell, buy_fee, sell_fee, common_network, net_profit, net_spread, processing_time):
     link_buy = generate_buy_link(buy_ex, f"{coin}/USDT")
     link_sell = generate_buy_link(sell_ex, f"{coin}/USDT")
     
@@ -194,27 +228,18 @@ def format_signal_text(coin, buy_ex, sell_ex, p_buy, p_sell, buy_fee, sell_fee, 
     if net_details.get('blacklisted', False):
         overall_status = "⛔️ СЕТЬ В ЧЕРНОМ СПИСКЕ"
         overall_icon = "⛔️"
-    elif net_details.get('too_slow', False):
-        overall_status = "🐌 ОЧЕНЬ МЕДЛЕННАЯ СЕТЬ"
-        overall_icon = "🐌"
     elif net_details.get('recommended', False):
-        overall_status = "✅ БЕЗОПАСНЫЙ АРБИТРАЖ"
+        overall_status = "✅ РЕКОМЕНДУЕТСЯ"
         overall_icon = "✅"
     else:
         overall_status = "⚠️ ПРОВЕРЬТЕ СЕТЬ"
         overall_icon = "⚠️"
     
-    warning_text = ""
-    if net_details.get('too_slow', False):
-        warning_text = "\n⚠️ **ВНИМАНИЕ: МЕДЛЕННАЯ СЕТЬ!** ⚠️\nВывод может занять более 30 минут!\n"
-    elif net_details.get('blacklisted', False):
-        warning_text = "\n⛔️ **СЕТЬ В ЧЕРНОМ СПИСКЕ!** ⛔️\nБыли проблемы с выводами! НЕ РЕКОМЕНДУЕТСЯ!\n"
-    
     return (
         f"⚡️ **НАЙДЕН АРБИТРАЖНЫЙ СПРЕД: #{coin}** ⚡️\n"
-        f"{warning_text}"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"{overall_icon} **СТАТУС:** {overall_status}\n"
+        f"⏱ **Время обработки:** {processing_time:.2f} сек\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"🟢 **ПОКУПКА: {buy_ex.upper()}**\n"
         f"├ 💵 Цена: `{p_buy:.8f} USDT`\n"
@@ -255,10 +280,9 @@ async def stats_command():
     
     stats_message += f"💎 Всего сигналов: **{total_opp}**\n"
     stats_message += f"💰 Мат. профит: **${total_profit:.2f}**\n"
-    stats_message += f"⛔️ Заблокировано сетей: {len(BLACKLIST_NETWORKS)}\n"
-    stats_message += f"⏱ Макс. время вывода: {MAX_WITHDRAWAL_TIME_MIN} мин\n"
     stats_message += f"📊 Мин. объем: ${MIN_VOLUME_USD:,}\n"
     stats_message += f"📈 Макс. спред: {MAX_SPREAD_PCT}%\n"
+    stats_message += f"🌐 Известных сетей: {len(NETWORKS_INFO)}\n"
     stats_message += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
     
     stats_message += "🟢 **ТОП БИРЖ ДЛЯ ПОКУПКИ:**\n"
@@ -283,15 +307,14 @@ def run_telegram_bot():
     async def start_handler(update, context):
         await update.message.reply_text(
             "✅ **Арбитражный бот запущен!**\n\n"
-            "**Настройки безопасности:**\n"
-            f"✓ ПОЛНЫЙ перебор ВСЕХ бирж (а не только Top-3)\n"
+            "**Настройки:**\n"
+            f"✓ ПОЛНЫЙ перебор ВСЕХ бирж\n"
             f"✓ Поиск по ВСЕМ монетам (объем от ${MIN_VOLUME_USD:,})\n"
             f"✓ Максимальный спред до {MAX_SPREAD_PCT}%\n"
-            f"✓ Проверка ОДИНАКОВЫХ сетей для вывода/депозита\n"
-            f"✓ Черный список проблемных сетей ({len(BLACKLIST_NETWORKS)} сетей)\n\n"
+            f"✓ Проверка ОДИНАКОВЫХ сетей\n"
+            f"✓ База {len(NETWORKS_INFO)} сетей\n\n"
             "**Команды:**\n"
-            "📊 /stats - Статистика\n\n"
-            "✅ **Теперь перебираются ВСЕ комбинации бирж!**"
+            "📊 /stats - Статистика"
         )
     
     async def stats_handler(update, context):
@@ -316,11 +339,12 @@ def run_telegram_bot():
     application.run_polling(allowed_updates=['message', 'callback_query'])
 
 async def scan_all_markets():
-    logger.info("⏳ Инициализация бирж...")
-    logger.info(f"✅ ПОЛНЫЙ перебор ВСЕХ комбинаций бирж (не только Top-3)")
-    logger.info(f"✅ Поиск по ВСЕМ монетам с объемом от ${MIN_VOLUME_USD:,}")
-    logger.info(f"✅ Максимальный спред: {MAX_SPREAD_PCT}%")
-    logger.info("✅ Включена проверка ОДИНАКОВЫХ сетей для вывода и депозита")
+    logger.info("="*50)
+    logger.info("ЗАПУСК АРБИТРАЖНОГО БОТА")
+    logger.info(f"Поиск по ВСЕМ монетам с объемом от ${MIN_VOLUME_USD:,}")
+    logger.info(f"Максимальный спред: {MAX_SPREAD_PCT}%")
+    logger.info(f"База данных сетей: {len(NETWORKS_INFO)}")
+    logger.info("="*50)
     
     exchanges = {}
     for ex_id in EXCHANGES_LIST:
@@ -334,11 +358,17 @@ async def scan_all_markets():
             instance = ex_class(config)
             await instance.load_markets()
             exchanges[ex_id] = instance
-            logger.info(f"✅ Загружена {ex_id}")
+            logger.info(f"✅ Загружена биржа: {ex_id}")
         except Exception as e:
             logger.warning(f"⚠️ Не загружена {ex_id}: {e}")
 
+    logger.info(f"✅ Загружено бирж: {len(exchanges)}")
+    
+    scan_count = 0
+    
     while True:
+        scan_start_time = time.time()
+        scan_count += 1
         all_tickers = {}
         current_time = time.time()
 
@@ -363,20 +393,17 @@ async def scan_all_markets():
         await asyncio.gather(*[fetch_tickers_safe(eid, ex) for eid, ex in exchanges.items()])
         
         fresh_detected_keys = set()
-        logger.info(f"🔄 Сканирование {len(all_tickers)} торговых пар...")
+        logger.info(f"🔄 Скан #{scan_count} | Найдено {len(all_tickers)} монет | Бирж: {len(exchanges)}")
 
         async def process_single_symbol(symbol, exchange_data):
             coin = symbol.split('/')[0]
             
-            # 🔥 ИСПРАВЛЕНИЕ 1: Берем ВСЕ биржи для покупки и продажи, а не только Top-3
             buy_exchanges = [(eid, d['ask']) for eid, d in exchange_data.items()]
             sell_exchanges = [(eid, d['bid']) for eid, d in exchange_data.items()]
             
-            # Сортируем для оптимизации, но берем ВСЕ
-            buy_exchanges.sort(key=lambda x: x[1])  # По возрастанию цены (самые дешевые)
-            sell_exchanges.sort(key=lambda x: x[1], reverse=True)  # По убыванию цены (самые дорогие)
+            buy_exchanges.sort(key=lambda x: x[1])
+            sell_exchanges.sort(key=lambda x: x[1], reverse=True)
             
-            # Перебираем ВСЕ комбинации
             for buy_ex, ask_p in buy_exchanges:
                 for sell_ex, bid_p in sell_exchanges:
                     if buy_ex == sell_ex: 
@@ -406,7 +433,11 @@ async def scan_all_markets():
                                         continue
                                     
                                     for sell_net_name, sell_net_info in sell_networks.items():
-                                        if net_name.upper() == sell_net_name.upper() or net_name.upper() in sell_net_name.upper() or sell_net_name.upper() in net_name.upper():
+                                        # Улучшенное сравнение сетей
+                                        net_name_clean = net_name.upper().replace('_', '').replace('-', '')
+                                        sell_net_clean = sell_net_name.upper().replace('_', '').replace('-', '')
+                                        
+                                        if net_name_clean == sell_net_clean or net_name_clean in sell_net_clean or sell_net_clean in net_name_clean:
                                             if not sell_net_info.get('deposit', False):
                                                 continue
                                             
@@ -424,7 +455,7 @@ async def scan_all_markets():
                                                 'sell_fee': sell_fee,
                                                 'total_fee': buy_fee + sell_fee
                                             })
-                                            logger.info(f"✅ Найдена общая сеть {net_name} для {coin} на {buy_ex} и {sell_ex}")
+                                            logger.debug(f"Найдена сеть {net_name} для {coin}")
                             
                     except Exception as e:
                         continue
@@ -443,7 +474,7 @@ async def scan_all_markets():
                         continue
                     
                     if spread_key in detected_candidates:
-                        if current_time - detected_candidates[spread_key] < 120:
+                        if current_time - detected_candidates[spread_key] < 60:
                             continue
                     
                     if spread_key not in detected_candidates:
@@ -465,7 +496,9 @@ async def scan_all_markets():
                             exchange_stats[sell_ex]['sell_count'] += 1
                             exchange_stats[sell_ex]['total_profit'] += (net_profit / 2)
                             
-                            msg_text = format_signal_text(coin, buy_ex, sell_ex, p_buy, p_sell, b_fee, s_fee, best_network, net_profit, net_spread)
+                            processing_time = time.time() - scan_start_time
+                            
+                            msg_text = format_signal_text(coin, buy_ex, sell_ex, p_buy, p_sell, b_fee, s_fee, best_network, net_profit, net_spread, processing_time)
                             try:
                                 msg = await bot.send_message(chat_id=CHAT_ID, text=msg_text, parse_mode="Markdown", disable_web_page_preview=True)
                                 active_spreads[spread_key] = {
@@ -477,14 +510,14 @@ async def scan_all_markets():
                                     "created_at": current_time
                                 }
                                 detected_candidates.pop(spread_key, None)
-                                logger.info(f"✅ СИГНАЛ: {coin} {buy_ex}→{sell_ex} через {best_network['network']} | спред: {net_spread:.2f}% | профит: ${net_profit:.2f}")
+                                logger.info(f"✅ СИГНАЛ: {coin} {buy_ex}→{sell_ex} | сеть: {best_network['network']} | спред: {net_spread:.2f}% | профит: ${net_profit:.2f}")
                             except Exception as e:
                                 logger.error(f"Ошибка отправки: {e}")
 
         chunks = list(all_tickers.items())
-        for i in range(0, len(chunks), 30):
-            await asyncio.gather(*[process_single_symbol(sym, edata) for sym, edata in chunks[i:i+30]])
-            await asyncio.sleep(0.05)
+        for i in range(0, len(chunks), 50):
+            await asyncio.gather(*[process_single_symbol(sym, edata) for sym, edata in chunks[i:i+50]])
+            await asyncio.sleep(0.1)
         
         for k in list(detected_candidates.keys()):
             if k not in fresh_detected_keys:
@@ -494,7 +527,7 @@ async def scan_all_markets():
         for spread_key, spread_data in list(active_spreads.items()):
             if spread_key not in fresh_detected_keys:
                 last_seen = spread_last_seen.get(spread_key, 0)
-                if current_time - last_seen > 30:
+                if current_time - last_seen > 60:
                     spreads_to_remove.append(spread_key)
             else:
                 spread_last_seen[spread_key] = current_time
@@ -504,7 +537,7 @@ async def scan_all_markets():
                 spread_data = active_spreads.get(spread_key)
                 if spread_data:
                     await bot.delete_message(chat_id=CHAT_ID, message_id=spread_data["message_id"])
-                    logger.info(f"🗑️ Удален спред {spread_data['coin']} ({spread_data['network']})")
+                    logger.info(f"🗑️ Удален спред {spread_data['coin']}")
             except:
                 pass
             finally:
@@ -512,19 +545,10 @@ async def scan_all_markets():
                 spread_last_seen.pop(spread_key, None)
                 detected_candidates.pop(spread_key, None)
         
-        for spread_key, spread_data in list(active_spreads.items()):
-            if current_time - spread_data.get('created_at', current_time) > 600:
-                try:
-                    await bot.delete_message(chat_id=CHAT_ID, message_id=spread_data["message_id"])
-                except:
-                    pass
-                active_spreads.pop(spread_key, None)
-                spread_last_seen.pop(spread_key, None)
-        
-        if active_spreads:
-            logger.info(f"📊 Активных спредов: {len(active_spreads)}")
+        scan_time = time.time() - scan_start_time
+        logger.info(f"✅ Скан #{scan_count} завершен за {scan_time:.2f} сек | Найдено спредов: {len(active_spreads)}")
                     
-        await asyncio.sleep(10)
+        await asyncio.sleep(15)
 
 EXCHANGES_LIST = [
     'binance', 'bybit', 'okx', 'gate', 'kucoin', 'bitget', 'mexc', 
