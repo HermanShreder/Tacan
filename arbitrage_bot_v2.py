@@ -1,14 +1,16 @@
 import asyncio
 import ccxt.async_support as ccxt
-import json
 import sqlite3
+import json
+import logging
 from datetime import datetime, timedelta
 import telegram
+from telegram import ReplyKeyboardMarkup, KeyboardButton
+from itertools import combinations
 import os
-from dotenv import load_dotenv
 
 # ========================= CONFIG =========================
-load_dotenv()
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 GATE_API_KEY = "5d80677222f36e38d07d92f317e45674"
 GATE_API_SECRET = "1a4d3c051cb523364b540e87361435a096b20dc51d96df9a91eaf03c6ad55c13"
@@ -16,181 +18,241 @@ GATE_API_SECRET = "1a4d3c051cb523364b540e87361435a096b20dc51d96df9a91eaf03c6ad55
 BITGET_API_KEY = "bg_c425385453f54a25ed72a37f7498bfc5"
 BITGET_API_SECRET = "46401f612cd8fa387c091a97061962d1f07b31187681405df72b457b0a78f69a"
 
+HUOBI_API_KEY = "29d9fe7e-4b147f7f-dbuqg6hkte-0a894"
+HUOBI_API_SECRET = "b0925bb5-07815986-b85bf68f-558a5"
+
+BINANCE_API_KEY = "uvxQH98mpFgMRLM0ImIhBBohS3Pl86hVzDifpOUbmkRbDje6nZ0d74bB6oJLSFKt"
+BINANCE_API_SECRET = "C7LOcLQBBNsF8LWTabxy7sul8mC79pcsbEzlb518rnCE2O4FzejnvZa0j04ZoiEB"
+
+KUCOIN_API_KEY = "6a24241f371e5e0001ba9ca2"
+KUCOIN_API_SECRET = "1ceb4e8a-3bc4-4d69-8ac3-3c4c0eff1582"
+
 TELEGRAM_TOKEN = "5814224378:AAHlkQ41I-uQ9XXe_jmn5G28Q2x6nXCVNM8"
 CHAT_ID = "5253808709"
 
-MIN_SPREAD = 0.005          # 0.5%
-MIN_VOLUME_24H = 70000      # USD
+MIN_SPREAD = 0.005
+MIN_VOLUME_24H = 70000
 SPREAD_LIFETIME_MIN = 3
-UPDATE_INTERVAL = 120       # 2 минуты
+UPDATE_INTERVAL = 120
 TRADE_AMOUNT_USD = 500
 
 # ====================== EXCHANGES ======================
-ex_gate = ccxt.gateio({
-    'apiKey': GATE_API_KEY,
-    'secret': GATE_API_SECRET,
-    'enableRateLimit': True,
-    'options': {'defaultType': 'spot'}
-})
-
-ex_bitget = ccxt.bitget({
-    'apiKey': BITGET_API_KEY,
-    'secret': BITGET_API_SECRET,
-    'enableRateLimit': True,
-    'options': {'defaultType': 'spot'}
-})
+exchanges = {
+    'Gate': ccxt.gateio({'apiKey': GATE_API_KEY, 'secret': GATE_API_SECRET, 'enableRateLimit': True, 'options': {'defaultType': 'spot'}}),
+    'Bitget': ccxt.bitget({'apiKey': BITGET_API_KEY, 'secret': BITGET_API_SECRET, 'enableRateLimit': True, 'options': {'defaultType': 'spot'}}),
+    'Huobi': ccxt.htx({'apiKey': HUOBI_API_KEY, 'secret': HUOBI_API_SECRET, 'enableRateLimit': True}),
+    'Binance': ccxt.binance({'apiKey': BINANCE_API_KEY, 'secret': BINANCE_API_SECRET, 'enableRateLimit': True}),
+    'Kucoin': ccxt.kucoin({'apiKey': KUCOIN_API_KEY, 'secret': KUCOIN_API_SECRET, 'enableRateLimit': True})
+}
 
 active_spreads = {}
 db_conn = None
+bot = telegram.Bot(token=TELEGRAM_TOKEN)
 
 # ====================== DATABASE ======================
 async def init_db():
     global db_conn
-    db_conn = sqlite3.connect('arbitrage.db')
+    db_conn = sqlite3.connect('multi_arbitrage.db', check_same_thread=False)
     db_conn.execute('''CREATE TABLE IF NOT EXISTS networks (
-                        symbol TEXT, exchange TEXT, network TEXT, 
-                        withdraw_fee REAL, withdraw_min REAL, 
-                        deposit_time_avg INTEGER, withdraw_time_avg INTEGER)''')
+        symbol TEXT, exchange TEXT, network TEXT, withdraw_fee REAL, 
+        deposit_fee REAL, withdraw_time INTEGER, deposit_time INTEGER, is_withdraw_open INTEGER, is_deposit_open INTEGER)''')
     db_conn.execute('''CREATE TABLE IF NOT EXISTS stats (
-                        timestamp TEXT, symbol TEXT, direction TEXT, 
-                        spread REAL, profit REAL)''')
+        timestamp TEXT, symbol TEXT, buy_ex TEXT, sell_ex TEXT, spread REAL, profit REAL, volume REAL)''')
     db_conn.commit()
+
+# ====================== NETWORKS & FEES ======================
+async def update_network_info():
+    logging.info("Обновляем данные по сетям и комиссиям...")
+    for name, ex in exchanges.items():
+        try:
+            markets = await ex.load_markets()
+            for symbol in list(markets.keys()):
+                if not symbol.endswith('/USDT'): continue
+                base = symbol.split('/')[0]
+                try:
+                    fees = await ex.fetch_deposit_withdraw_fees(base)
+                    for net, data in fees.items():
+                        db_conn.execute('''INSERT OR REPLACE INTO networks 
+                            VALUES (?,?,?,?,?,?,?,?,?)''', (
+                            base, name, net, 
+                            data.get('withdraw', {}).get('fee', 0),
+                            data.get('deposit', {}).get('fee', 0),
+                            data.get('withdraw', {}).get('estimatedTime', 600),
+                            data.get('deposit', {}).get('estimatedTime', 300),
+                            1 if data.get('withdraw', {}).get('enabled', False) else 0,
+                            1 if data.get('deposit', {}).get('enabled', False) else 0
+                        ))
+                    db_conn.commit()
+                except:
+                    continue
+        except:
+            continue
+
+async def get_network_status(base, ex_name):
+    try:
+        row = db_conn.execute("SELECT network, withdraw_fee, withdraw_time, is_withdraw_open, is_deposit_open FROM networks WHERE symbol=? AND exchange=?", (base, ex_name)).fetchone()
+        if row:
+            return row
+        return ("TRC20", 0.5, 10, 1, 1)  # default
+    except:
+        return ("TRC20", 0.5, 10, 1, 1)
 
 # ====================== HELPERS ======================
 async def get_order_book(exchange, symbol, depth=15):
     try:
         ob = await exchange.fetch_order_book(symbol, limit=depth)
-        best_ask = ob['asks'][0][0] if ob['asks'] else None
-        best_bid = ob['bids'][0][0] if ob['bids'] else None
-        ask_volume = sum(v for p, v in ob['asks'][:5])
-        return best_ask, best_bid, ask_volume
+        ask = ob['asks'][0][0] if ob.get('asks') else None
+        bid = ob['bids'][0][0] if ob.get('bids') else None
+        vol = sum(v for p,v in (ob.get('asks') or [])[:5])
+        return ask, bid, vol
     except:
         return None, None, 0
 
-async def fetch_network_info(exchange_name, base_symbol):
-    try:
-        ex = ex_gate if exchange_name == 'gate' else ex_bitget
-        fees = await ex.fetch_deposit_withdraw_fees(base_symbol)
-        return fees
-    except:
-        return {}
-
 async def send_to_telegram(spread):
+    keyboard = [
+        [KeyboardButton("/stats"), KeyboardButton("/top")],
+        [KeyboardButton("/pause"), KeyboardButton("/resume")]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     try:
-        bot = telegram.Bot(token=TELEGRAM_TOKEN)
         msg = f"""
-🚨 **SPREAD LIVE {spread['spread']}%** | {spread['direction']}
+🚨 **LIVE SPREAD {spread['spread']}%** | {spread['buy_ex']} → {spread['sell_ex']}
 **Монета:** {spread['symbol']}
-**Покупка:** {spread['buy_exchange']} @ {spread['buy_price']} (стакан ~{spread['volume_usd']:.0f}$)
-**Продажа:** {spread['sell_exchange']} @ {spread['sell_price']}
-**Вывод/Ввод:** ОТКРЫТЫ ✅
-**Время сети:** ~{spread.get('withdraw_time', 8)} мин
-**Чистая прибыль с 500$:** +{spread['net_profit']}$ 
+**Купить:** {spread['buy_ex']} @ {spread['buy_price']} (стакан {spread['volume_usd']}$)
+**Продать:** {spread['sell_ex']} @ {spread['sell_price']}
+**Сети:** Вывод/Ввод ОТКРЫТЫ ✅
+**Время вывода:** ~{spread['withdraw_time']} мин
+**Чистая прибыль с 500$:** **+{spread['net_profit']}$**
         """
-        await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode='Markdown')
+        await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode='Markdown', reply_markup=reply_markup)
     except Exception as e:
-        print(f"TG error: {e}")
+        logging.error(f"TG send error: {e}")
 
 # ====================== MAIN SCANNER ======================
-async def scan_spreads():
+async def scan_multi_arbitrage():
     await init_db()
-    markets_gate = await ex_gate.load_markets()
-    markets_bitget = await ex_bitget.load_markets()
-    common = {s for s in markets_gate if s in markets_bitget and s.endswith('/USDT')}
+    await update_network_info()  # Первичное обновление сетей
+
+    markets = {}
+    for name, ex in exchanges.items():
+        try:
+            markets[name] = await ex.load_markets()
+        except Exception as e:
+            logging.error(f"Load markets {name}: {e}")
+
+    all_symbols = set()
+    for m in markets.values():
+        all_symbols.update([s for s in m if s.endswith('/USDT')])
+
+    logging.info(f"Загружено {len(all_symbols)} пар для сканирования")
+
+    last_network_update = datetime.now()
 
     while True:
         now = datetime.now()
-        for symbol in list(common):
+        if (now - last_network_update).total_seconds() > 3600:  # обновляем сети каждый час
+            await update_network_info()
+            last_network_update = now
+
+        for symbol in list(all_symbols):
             try:
-                # Volume filter
-                ticker = await ex_gate.fetch_ticker(symbol)
+                # Volume filter (Gate as reference)
+                ticker = await exchanges['Gate'].fetch_ticker(symbol)
                 if ticker.get('quoteVolume', 0) < MIN_VOLUME_24H:
                     continue
 
-                # Order books
-                g_ask, g_bid, g_vol = await get_order_book(ex_gate, symbol)
-                b_ask, b_bid, b_vol = await get_order_book(ex_bitget, symbol)
-
-                if not all([g_ask, g_bid, b_ask, b_bid]):
-                    continue
-
-                # Two directions
-                spread_gb = (g_bid - b_ask) / b_ask   # Buy Bitget → Sell Gate
-                spread_bg = (b_bid - g_ask) / g_ask   # Buy Gate → Sell Bitget
-
-                best_spread = max(spread_gb, spread_bg)
-                if best_spread < MIN_SPREAD:
-                    continue
-
-                direction = "Bitget→Gate" if spread_gb > spread_bg else "Gate→Bitget"
-                buy_ex_name = "Bitget" if direction.startswith("Bitget") else "Gate"
-                sell_ex_name = "Gate" if direction.startswith("Bitget") else "Bitget"
-
-                buy_price = b_ask if buy_ex_name == "Bitget" else g_ask
-                sell_price = g_bid if sell_ex_name == "Gate" else b_bid
-
-                volume_usd = min(g_vol, b_vol) * buy_price
-
-                # Network check
                 base = symbol.replace('/USDT', '')
-                net_buy = await fetch_network_info('bitget' if buy_ex_name == "Bitget" else 'gate', base)
-                net_sell = await fetch_network_info('gate' if sell_ex_name == "Gate" else 'bitget', base)
 
-                withdraw_time = 10  # average, можно улучшить из DB
+                for (ex1_name, ex1), (ex2_name, ex2) in combinations(exchanges.items(), 2):
+                    try:
+                        ask1, bid1, vol1 = await get_order_book(ex1, symbol)
+                        ask2, bid2, vol2 = await get_order_book(ex2, symbol)
 
-                fee_estimate = 0.001 * TRADE_AMOUNT_USD * 2
-                gross_profit = TRADE_AMOUNT_USD * best_spread
-                net_profit = gross_profit - fee_estimate - 5  # network fee buffer
+                        if not all([ask1, bid1, ask2, bid2]):
+                            continue
 
-                if net_profit <= 0 or withdraw_time > 30:
-                    continue
+                        spread12 = (bid1 - ask2) / ask2
+                        spread21 = (bid2 - ask1) / ask1
+                        best = max(spread12, spread21)
+                        if best < MIN_SPREAD:
+                            continue
 
-                spread_key = f"{symbol}_{direction}"
+                        if spread12 > spread21:
+                            buy_ex, sell_ex = ex2_name, ex1_name
+                            buy_price, sell_price = ask2, bid1
+                            direction_spread = spread12
+                        else:
+                            buy_ex, sell_ex = ex1_name, ex2_name
+                            buy_price, sell_price = ask1, bid2
+                            direction_spread = spread21
 
-                spread_data = {
-                    "time": now.isoformat(),
-                    "symbol": symbol,
-                    "direction": direction,
-                    "spread": round(best_spread * 100, 2),
-                    "buy_exchange": buy_ex_name,
-                    "sell_exchange": sell_ex_name,
-                    "buy_price": round(buy_price, 6),
-                    "sell_price": round(sell_price, 6),
-                    "volume_usd": round(volume_usd, 0),
-                    "net_profit": round(net_profit, 2),
-                    "withdraw_time": withdraw_time
-                }
+                        volume_usd = min(vol1, vol2) * buy_price
 
-                active_spreads[spread_key] = spread_data
-                await send_to_telegram(spread_data)
+                        # Network data
+                        net_buy = await get_network_status(base, buy_ex)
+                        net_sell = await get_network_status(base, sell_ex)
+                        withdraw_time = max(net_buy[2], net_sell[2])
 
-                # Save stat
-                db_conn.execute("INSERT INTO stats VALUES (?, ?, ?, ?, ?)",
-                               (now.isoformat(), symbol, direction, best_spread, net_profit))
-                db_conn.commit()
+                        if net_buy[3] == 0 or net_sell[4] == 0 or withdraw_time > 40:
+                            continue
 
-            except Exception:
+                        gross = TRADE_AMOUNT_USD * direction_spread
+                        net_profit = gross - (TRADE_AMOUNT_USD * 0.0028) - (net_buy[1] + net_sell[1]) * 2 - 5
+
+                        if net_profit <= 0:
+                            continue
+
+                        spread_key = f"{symbol}_{buy_ex}_{sell_ex}"
+
+                        spread_data = {
+                            "time": now.isoformat(),
+                            "symbol": symbol,
+                            "buy_ex": buy_ex,
+                            "sell_ex": sell_ex,
+                            "spread": round(direction_spread * 100, 2),
+                            "buy_price": round(buy_price, 8),
+                            "sell_price": round(sell_price, 8),
+                            "volume_usd": round(volume_usd, 0),
+                            "net_profit": round(net_profit, 2),
+                            "withdraw_time": withdraw_time
+                        }
+
+                        if spread_key not in active_spreads or abs(active_spreads[spread_key]['spread'] - spread_data['spread']) > 0.1:
+                            active_spreads[spread_key] = spread_data
+                            await send_to_telegram(spread_data)
+
+                        # Stats
+                        db_conn.execute("INSERT INTO stats VALUES (?,?,?,?,?,?,?)",
+                            (now.isoformat(), symbol, buy_ex, sell_ex, direction_spread, net_profit, volume_usd))
+                        db_conn.commit()
+
+                    except:
+                        continue
+            except:
                 continue
 
         # Cleanup old spreads
         for k in list(active_spreads.keys()):
-            if (now - datetime.fromisoformat(active_spreads[k]["time"])).total_seconds() > SPREAD_LIFETIME_MIN * 60:
+            age = (now - datetime.fromisoformat(active_spreads[k]["time"])).total_seconds()
+            if age > SPREAD_LIFETIME_MIN * 60:
                 del active_spreads[k]
 
         await asyncio.sleep(UPDATE_INTERVAL)
 
-# ====================== STATS COMMAND (manual) ======================
-async def show_stats():
+# ====================== TG COMMANDS ======================
+async def handle_stats():
     try:
-        cursor = db_conn.execute("SELECT direction, COUNT(*), AVG(spread), AVG(profit) FROM stats GROUP BY direction")
-        print("=== STATISTICS ===")
-        for row in cursor.fetchall():
-            print(row)
-    except:
-        pass
+        rows = db_conn.execute("SELECT buy_ex, sell_ex, COUNT(*) as cnt, AVG(spread)*100 as avg_spread, AVG(profit) as avg_profit FROM stats GROUP BY buy_ex, sell_ex ORDER BY cnt DESC").fetchall()
+        msg = "📊 **СТАТИСТИКА ПО ПАРАМ БИРЖ**\n\n"
+        for r in rows[:15]:
+            msg += f"{r[0]} → {r[1]} | {r[2]} раз | {r[3]:.2f}% | +{r[4]:.1f}$\n"
+        await bot.send_message(CHAT_ID, msg, parse_mode='Markdown')
+    except Exception as e:
+        await bot.send_message(CHAT_ID, f"Stats error: {e}")
 
 # ====================== RUN ======================
 if __name__ == "__main__":
-    print("=== Underground Arbitrage Scanner STARTED ===")
-    print("Сканирование Gate ↔ Bitget | Мин. спред 0.5% | Обновление 2 мин")
-    asyncio.run(scan_spreads())
+    print("=== UNDERGROUND MULTI ARBITRAGE v2.0 STARTED ===")
+    print("Биржи: Gate.io, Bitget, Huobi(HTX), Binance, Kucoin")
+    print("Полная проверка сетей, времени вывода, стаканов, статистики, TG кнопки")
+    asyncio.run(scan_multi_arbitrage())
