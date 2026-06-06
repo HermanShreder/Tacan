@@ -31,7 +31,7 @@ EXCHANGE_CONFIGS = {
     },
     'bitget': {
         'apiKey': 'uvxQH98mpFgMRLM0ImIhBBohS3Pl86hVzDifpOUbmkRbDje6nZ0d74bB6oJLSFKt',
-        'secret': 'YOUR_BITGET_SECRET_HERE',  # ← замени если есть
+        'secret': 'YOUR_BITGET_SECRET_HERE',
         'options': {'defaultType': 'spot'}
     }
 }
@@ -146,6 +146,7 @@ async def check_withdrawal_network(exchange, coin):
                 can_wd = net_info.get('withdraw', False) or net_info.get('withdrawEnabled', False)
                 fee = float(net_info.get('withdrawFee') or net_info.get('fee') or 0.5)
                 status = f"ВВОД: {'✅ ОТКРЫТ' if can_dep else '❌ ЗАКРЫТ'} | ВЫВОД: {'✅ ОТКРЫТ' if can_wd else '❌ ЗАКРЫТ'}"
+                # ОБА ДОЛЖНЫ БЫТЬ ОТКРЫТЫ
                 if can_dep and can_wd:
                     available_networks.append({
                         'name': net_name.upper(),
@@ -252,29 +253,23 @@ async def process_single_symbol(symbol, exchange_data, exchanges, fresh_keys):
     coin = symbol.split('/')[0]
     buy_list = sorted([(eid, d['ask']) for eid, d in exchange_data.items() if eid in exchanges], key=lambda x: x[1])[:3]
     sell_list = sorted([(eid, d['bid']) for eid, d in exchange_data.items() if eid in exchanges], key=lambda x: x[1], reverse=True)[:3]
-
     for buy_ex, ask_p in buy_list:
         for sell_ex, bid_p in sell_list:
             if buy_ex == sell_ex: continue
             raw_spread = ((bid_p - ask_p) / ask_p) * 100
             if raw_spread < MIN_SPREAD_PCT or raw_spread > MAX_SPREAD_PCT: continue
-
             spread_key = f"{coin}_{buy_ex}_{sell_ex}"
             fresh_keys.add(spread_key)
-
             p_buy, _, b_fee = await get_order_book_depth(exchanges[buy_ex], symbol, 'buy', TRADE_SIZE_USD)
             p_sell, _, s_fee = await get_order_book_depth(exchanges[sell_ex], symbol, 'sell', TRADE_SIZE_USD)
             if not (p_buy and p_sell): continue
-
             net_info = await check_withdrawal_network(exchanges[buy_ex], coin)
             total_fees = b_fee + s_fee + net_info['fee']
             gross_profit = ((TRADE_SIZE_USD / p_buy) * p_sell - TRADE_SIZE_USD)
             net_profit = gross_profit - total_fees
             net_spread = (net_profit / TRADE_SIZE_USD) * 100
-
             if MIN_SPREAD_PCT <= net_spread <= MAX_SPREAD_PCT:
                 msg_text = format_signal_text(coin, buy_ex, sell_ex, p_buy, p_sell, b_fee, s_fee, net_info, net_profit, net_spread)
-
                 if spread_key in active_spreads:
                     try:
                         await bot.edit_message_text(
@@ -307,7 +302,6 @@ async def process_single_symbol(symbol, exchange_data, exchanges, fresh_keys):
 async def main_scanner():
     global_tickers = {}
     exchanges = {}
-
     logger.info("Инициализация бирж...")
     for ex_id in EXCHANGES_LIST:
         try:
@@ -320,15 +314,12 @@ async def main_scanner():
             logger.info(f"✓ {ex_id} загружен с WS")
         except Exception as e:
             logger.warning(f"✗ {ex_id}: {e}")
-
     while True:
         try:
             current_time = time.time()
             fresh_keys = set()
             for symbol, data in list(global_tickers.items()):
                 await process_single_symbol(symbol, data, exchanges, fresh_keys)
-
-            # Чистка мертвых спредов
             for k in list(active_spreads.keys()):
                 if k not in fresh_keys:
                     try:
@@ -336,7 +327,6 @@ async def main_scanner():
                     except:
                         pass
                     active_spreads.pop(k, None)
-
             await asyncio.sleep(4)
         except Exception as e:
             logger.error(f"Main scanner error: {e}")
