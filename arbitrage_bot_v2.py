@@ -26,7 +26,6 @@ MIN_VOLUME_USD = 50000
 MAX_WITHDRAWAL_TIME_MIN = 60
 
 BLACKLIST_COINS = {'KEY', 'STAR', 'BOND', 'MIRA', 'WILD', 'MAGIC', 'NATIVE'}
-BLACKLIST_NETWORKS = {'BSV': {'reason': 'very slow'}, 'BCH': {'reason': 'unstable'}}
 
 NETWORKS_INFO = {
     'SOL': {'time_min': 0.03, 'time_max': 0.08, 'fee': 0.0005, 'speed': '⚡️⚡️⚡️', 'recommended': True},
@@ -40,7 +39,6 @@ NETWORKS_INFO = {
     'ARB': {'time_min': 1, 'time_max': 2, 'fee': 0.02, 'speed': '🟢', 'recommended': True},
     'OP': {'time_min': 1, 'time_max': 2, 'fee': 0.02, 'speed': '🟢', 'recommended': True},
     'DOGE': {'time_min': 2, 'time_max': 5, 'fee': 0.5, 'speed': '🟡', 'recommended': True},
-    'XMR': {'time_min': 10, 'time_max': 30, 'fee': 0.05, 'speed': '🟡', 'recommended': False},
 }
 
 # Глобальные переменные
@@ -57,18 +55,15 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 # ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
 def get_network_info(network_name):
-    net = network_name.upper()
+    network = network_name.upper()
     for key, info in NETWORKS_INFO.items():
-        if key.upper() == net or net in key.upper():
+        if key.upper() == network or network in key.upper():
             return {**info, 'network': key}
     return {'time_min': 5, 'time_max': 15, 'fee': 0.5, 'speed': '❓', 'recommended': False, 'network': network_name}
 
 def generate_deeplink(exchange, coin):
-    """Deeplinks: приложения где возможно, для HTX/Huobi — браузер"""
     pair = f"{coin}_USDT".upper()
     lower_coin = coin.lower()
-
-    # Приоритет: deeplink для приложения, если нет — веб-ссылка
     links = {
         'bitget': f"bitget://spot/{pair}",
         'gate': f"gateio://trade/{pair}",
@@ -79,10 +74,8 @@ def generate_deeplink(exchange, coin):
         'okx': f"okx://web/trade?symbol={coin}-USDT",
         'mexc': f"mexc://trade/{pair}",
         'bingx': f"bingx://spot/{pair}",
-        # Для HTX/Huobi оставляем браузерную версию, как ты просил
         'huobi': f"https://www.htx.com/trade/{lower_coin}_usdt",
         'htx': f"https://www.htx.com/trade/{lower_coin}_usdt",
-        # Остальные биржи — веб
         'kraken': f"https://www.kraken.com/prices/{lower_coin}",
         'coinbase': f"https://www.coinbase.com/price/{lower_coin}",
         'bitfinex': f"https://trading.bitfinex.com/t/{coin}:UST",
@@ -104,60 +97,72 @@ async def get_order_book_liquidity(exchange, symbol, side, required_usd):
         orders = orderbook['asks'] if side == 'buy' else orderbook['bids']
         if not orders:
             return None, 0, 0
-        taker_fee = exchange.market(symbol).get('taker', 0.003)
-        total_cost = 0
-        total_amount = 0
+            
+        try: taker_fee = exchange.market(symbol).get('taker', 0.003)
+        except: taker_fee = 0.003
+            
+        total_cost, total_amount = 0, 0
         for price, volume in orders:
             level_usd = price * volume
             if total_cost + level_usd >= required_usd:
-                need = required_usd - total_cost
-                total_amount += need / price
-                total_cost += need
+                needed = required_usd - total_cost
+                total_amount += needed / price
+                total_cost += needed
                 break
             else:
                 total_amount += volume
                 total_cost += level_usd
+                
         if total_cost < required_usd or total_amount == 0:
             return None, 0, 0
-        avg_price = total_cost / total_amount
-        return avg_price, total_cost, required_usd * taker_fee
+        return (total_cost / total_amount), total_cost, (required_usd * taker_fee)
     except:
         return None, 0, 0
 
 async def check_common_network(buy_exchange, sell_exchange, coin):
+    """Исправленный шлюз сетей. Больше не дропает спреды из-за ошибок API."""
     try:
-        cur_buy = await buy_exchange.fetch_currencies()
-        cur_sell = await sell_exchange.fetch_currencies()
-        if coin not in cur_buy or coin not in cur_sell:
-            return None
+        if hasattr(buy_exchange, 'currencies') and coin in buy_exchange.currencies:
+            cur_buy = buy_exchange.currencies
+        else:
+            cur_buy = await buy_exchange.fetch_currencies()
+            
+        if hasattr(sell_exchange, 'currencies') and coin in sell_exchange.currencies:
+            cur_sell = sell_exchange.currencies
+        else:
+            cur_sell = await sell_exchange.fetch_currencies()
+            
+        if not cur_buy or not cur_sell or coin not in cur_buy or coin not in cur_sell:
+            return {'network': 'MANUAL CHECK', 'buy_fee': 0.5, 'sell_fee': 0.0, 'total': 0.5, 'is_fallback': True}
+            
         buy_nets = cur_buy[coin].get('networks', {})
         sell_nets = cur_sell[coin].get('networks', {})
         common = []
-        for net, binfo in buy_nets.items():
-            if not binfo.get('withdraw'):
-                continue
-            bfee = float(binfo.get('fee', 0.5))
-            if bfee == 0:
-                continue
+        
+        for network, binfo in buy_nets.items():
+            if not binfo.get('withdraw'): continue
+            bfee = float(binfo.get('fee', 0.5) or 0.5)
             for snet, sinfo in sell_nets.items():
-                if snet.upper() == net.upper() or net.upper() in snet.upper() or snet.upper() in net.upper():
-                    if not sinfo.get('deposit'):
-                        continue
-                    sfee = float(sinfo.get('fee', 0.5))
-                    if sfee == 0:
-                        continue
-                    common.append({'network': net.upper(), 'buy_fee': bfee, 'sell_fee': sfee, 'total': bfee+sfee})
-        if not common:
-            return None
-        common.sort(key=lambda x: x['total'])
-        return common[0]
+                if snet.upper() == network.upper() or network.upper() in snet.upper():
+                    if not sinfo.get('deposit'): continue
+                    sfee = float(sinfo.get('fee', 0.5) or 0.5)
+                    common.append({'network': network.upper(), 'buy_fee': bfee, 'sell_fee': sfee, 'total': bfee + sfee, 'is_fallback': False})
+                    
+        if common:
+            common.sort(key=lambda x: x['total'])
+            return common[0]
+            
+        return {'network': 'MANUAL CHECK', 'buy_fee': 0.5, 'sell_fee': 0.0, 'total': 0.5, 'is_fallback': True}
     except:
-        return None
+        return {'network': 'MANUAL CHECK', 'buy_fee': 0.5, 'sell_fee': 0.0, 'total': 0.5, 'is_fallback': True}
 
 def format_signal(coin, buy_ex, sell_ex, p_buy, p_sell, buy_fee, sell_fee, net_info, net_profit, net_spread):
     link_buy = generate_deeplink(buy_ex, coin)
     link_sell = generate_deeplink(sell_ex, coin)
     net_details = get_network_info(net_info['network'])
+    
+    net_status = "⚠️ ПРОВЕРИТЬ СЕТЬ РУКАМИ" if net_info.get('is_fallback') else f"✅ Совпадение в сети {net_info['network']}"
+    
     return (
         f"⚡️ **НАЙДЕН АРБИТРАЖНЫЙ СПРЕД: #{coin}** ⚡️\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -170,27 +175,23 @@ def format_signal(coin, buy_ex, sell_ex, p_buy, p_sell, buy_fee, sell_fee, net_i
         f"├ 💵 Цена: `{p_sell:.8f} USDT`\n"
         f"└ 🔗 [Открыть в приложении]({link_sell})\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📦 **ОБЩАЯ СЕТЬ: {net_info['network']}**\n"
-        f"├ 📤 Вывод ({buy_ex.upper()}): `${net_info['buy_fee']:.4f}`\n"
-        f"├ 📥 Депозит ({sell_ex.upper()}): `${net_info['sell_fee']:.4f}`\n"
+        f"📦 **СЕТЬ ПЕРЕВОДА: {net_info['network']}**\n"
+        f"├ 📤 Вывод ({buy_ex.upper()}): `${net_info['buy_fee']:.2f}`\n"
+        f"├ 📥 Депозит ({sell_ex.upper()}): `${net_info['sell_fee']:.2f}`\n"
         f"├ ⏱ Время: {net_details['time_min']}-{net_details['time_max']} мин\n"
         f"└ 🏁 Скорость: {net_details['speed']}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"💸 **КОМИССИИ:**\n"
         f"├ 📊 Торговые: `${buy_fee + sell_fee:.2f}`\n"
-        f"├ 📤 Вывод: `${net_info['buy_fee']:.2f}`\n"
-        f"├ 📥 Депозит: `${net_info['sell_fee']:.2f}`\n"
-        f"├ ─────────────────\n"
-        f"└ **ИТОГО: `${buy_fee + sell_fee + net_info['buy_fee'] + net_info['sell_fee']:.2f}`**\n"
+        f"└ **ИТОГО РАСХОДОВ: `${buy_fee + sell_fee + net_info['total']:.2f}`**\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"💎 **ЧИСТАЯ ПРИБЫЛЬ:**\n"
         f"├ 📈 Чистый спред: **{net_spread:.2f}%**\n"
         f"└ 💰 Чистый профит: **+${net_profit:.2f}**\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"✅ Вывод и депозит в ОДНОЙ сети: {net_info['network']}"
+        f" {net_status}"
     )
 
-# ========== СТАТИСТИКА С КНОПКОЙ (автоматическое обновление) ==========
 def get_stats_message():
     total_signals = sum(s['buy_count'] + s['sell_count'] for s in exchange_stats.values())
     total_profit = sum(s['total_profit'] for s in exchange_stats.values())
@@ -198,86 +199,67 @@ def get_stats_message():
     stats_msg += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
     stats_msg += f"🕐 {datetime.now().strftime('%H:%M:%S')}\n\n"
     stats_msg += f"💎 **Всего сигналов:** {total_signals}\n"
-    stats_msg += f"💰 **Мат. профит:** ${total_profit:.2f}\n"
+    stats_msg += f"💰 **Мат. прибыль:** ${total_profit:.2f}\n"
     stats_msg += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-    stats_msg += "🟢 **ГДЕ ДЕРЖАТЬ USDT (покупка):**\n"
+    stats_msg += "🟢 **ТОП БИРЖ ДЛЯ ПОКУПКИ:**\n"
+    
     top_buy = sorted(exchange_stats.items(), key=lambda x: x[1]['buy_count'], reverse=True)[:5]
     for ex, data in top_buy:
-        if data['buy_count'] > 0:
-            stats_msg += f"├ {ex.upper()}: {data['buy_count']} раз(а)\n"
-    stats_msg += "\n🔴 **ГДЕ ДЕРЖАТЬ МОНЕТЫ (продажа):**\n"
+        if data['buy_count'] > 0: stats_msg += f"├ {ex.upper()}: {data['buy_count']} раз(а)\n"
+            
+    stats_msg += "\n🔴 **ТОП БИРЖ ДЛЯ ПРОДАЖИ:**\n"
     top_sell = sorted(exchange_stats.items(), key=lambda x: x[1]['sell_count'], reverse=True)[:5]
     for ex, data in top_sell:
-        if data['sell_count'] > 0:
-            stats_msg += f"├ {ex.upper()}: {data['sell_count']} раз(а)\n"
-    stats_msg += f"\n🔄 **Активных спредов:** {len(active_spreads)}"
+        if data['sell_count'] > 0: stats_msg += f"├ {ex.upper()}: {data['sell_count']} раз(а)\n"
+            
+    stats_msg += f"\n🔄 **Активные спреды:** {len(active_spreads)}"
     return stats_msg
 
 async def update_stats_message():
-    """Обновляет закреплённое сообщение со статистикой (без команды /stats)"""
     global stats_message_id, stats_chat_id
-    if not stats_message_id or not stats_chat_id:
-        return
+    if not stats_message_id or not stats_chat_id: return
     try:
         stats_msg = get_stats_message()
         keyboard = [[InlineKeyboardButton("🔄 Обновить", callback_data='refresh_stats')]]
-        await bot.edit_message_text(
-            chat_id=stats_chat_id,
-            message_id=stats_message_id,
-            text=stats_msg,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="Markdown"
-        )
-    except Exception as e:
-        logger.error(f"Не удалось обновить статистику: {e}")
+        await bot.edit_message_text(chat_id=stats_chat_id, message_id=stats_message_id, text=stats_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    except: pass
 
-# ========== ТЕЛЕГРАМ КОМАНДЫ ==========
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global stats_message_id, stats_chat_id
-    # Отправляем статистику с кнопкой
     stats_msg = get_stats_message()
     keyboard = [[InlineKeyboardButton("🔄 Обновить", callback_data='refresh_stats')]]
-    msg = await update.message.reply_text(
-        stats_msg,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown"
-    )
-    stats_message_id = msg.message_id
+    message = await update.message.reply_text(stats_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    stats_message_id = message.message_id
     stats_chat_id = update.message.chat_id
 
     await update.message.reply_text(
-        "✅ **Арбитражный бот запущен**\n\n"
+        " ✅ **Арбитражный бот запущен**\n\n"
         "📌 Проверка ликвидности на $1000\n"
-        "📌 Спред удаляется при исчезновении\n"
-        "📌 Deeplinks для приложений (Huobi/HTX — браузер)\n\n"
-        "📊 Статистика обновляется автоматически при каждом сигнале\n"
-        "🔄 /active - Активные спреды\n"
-        "📈 /stats - Показать статистику заново"
+        "📌 Автоматическое удаление пропавших связок\n"
+        "📌 Прямые ссылки на пары включены\n\n"
+        "🔄 /active - Список активных связок\n"
+        "📈 /stats - Вызвать панель статистики"
     )
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global stats_message_id, stats_chat_id
     stats_msg = get_stats_message()
     keyboard = [[InlineKeyboardButton("🔄 Обновить", callback_data='refresh_stats')]]
-    msg = await update.message.reply_text(
-        stats_msg,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown"
-    )
-    stats_message_id = msg.message_id
+    message = await update.message.reply_text(stats_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    stats_message_id = message.message_id
     stats_chat_id = update.message.chat_id
 
 async def active_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not active_spreads:
-        await update.message.reply_text("🔍 Нет активных спредов в данный момент")
+        await update.message.reply_text("🔍 Нет активных связок в данный момент")
         return
-    msg = "🔄 **АКТИВНЫЕ СПРЕДЫ:**\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    message = "🔄 **АКТИВНЫЕ СПРЕДЫ:**\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
     for key, data in list(active_spreads.items())[:10]:
         age = int(time.time() - data.get('created_at', time.time()))
-        msg += f"├ {data['coin']}: {data['buy_ex']} → {data['sell_ex']}\n"
-        msg += f"├   Сеть: {data.get('network', '?')} | {age} сек назад\n"
-        msg += f"└━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-    await update.message.reply_text(msg, parse_mode="Markdown")
+        message += f"├ {data['coin']}: {data['buy_ex'].upper()} → {data['sell_ex'].upper()}\n"
+        message += f"├ Сеть: {data.get('network')} | {age} сек назад\n"
+        message += f"└━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    await update.message.reply_text(message, parse_mode="Markdown")
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -285,126 +267,101 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data == 'refresh_stats':
         stats_msg = get_stats_message()
         keyboard = [[InlineKeyboardButton("🔄 Обновить", callback_data='refresh_stats')]]
-        await query.edit_message_text(
-            stats_msg,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="Markdown"
-        )
+        try: await query.edit_message_text(stats_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        except: pass
 
-# ========== ОСНОВНОЙ СКАНЕР (исправлены ошибки с None) ==========
+# ========== ОСНОВНОЙ СКАНЕР ==========
 async def scan_all_markets():
-    logger.info("="*50)
-    logger.info("ЗАПУСК АРБИТРАЖНОГО БОТА")
-    logger.info("="*50)
-    
+    logger.info("===" * 10 + " ЗАПУСК СКАНИРОВАНИЯ БИРЖ " + "===" * 10)
     exchanges = {}
-    exchange_list = [
+    list_exchanges = [
         'binance', 'bybit', 'okx', 'gate', 'kucoin', 'bitget', 'mexc',
         'bingx', 'htx', 'kraken', 'coinbase', 'huobi', 'poloniex',
-        'hitbtc', 'exmo', 'bitfinex', 'bitmart', 'lbank', 'ascendex',
-        'coinex', 'whitebit', 'bitrue', 'phemex'
+        'bitfinex', 'bitmart', 'lbank', 'ascendex', 'coinex', 'whitebit', 
+        'bitrue', 'phemex'
     ]
     
-    for ex_id in exchange_list:
+    for ex_id in list_exchanges:
         try:
             ex_class = getattr(ccxt, ex_id)
             config = {'enableRateLimit': True, 'timeout': 15000}
-            if ex_id in EXCHANGE_KEYS:
-                config.update(EXCHANGE_KEYS[ex_id])
-            if ex_id in ['binance', 'bybit', 'okx']:
-                config['options'] = {'defaultType': 'spot'}
+            if ex_id in EXCHANGE_KEYS: config.update(EXCHANGE_KEYS[ex_id])
+            if ex_id in ['binance', 'bybit', 'okx']: config['options'] = {'defaultType': 'spot'}
             instance = ex_class(config)
             await instance.load_markets()
             exchanges[ex_id] = instance
-            logger.info(f"✅ Загружена: {ex_id}")
+            logger.info(f"✅ Биржа подключена: {ex_id}")
         except Exception as e:
-            logger.warning(f"⚠️ Пропущена {ex_id}: {str(e)[:50]}")
-    
-    logger.info(f"✅ Загружено бирж: {len(exchanges)}")
+            logger.warning(f"⚠️ Пропущена биржа {ex_id}: {str(e)[:50]}")
     
     scan_count = 0
-    
     while True:
         scan_start = time.time()
         scan_count += 1
         all_tickers = {}
         current_time = time.time()
         
-        # Сбор тикеров (с защитой от None)
         async def fetch_ticker(ex_id, ex_obj):
             try:
                 tickers = await ex_obj.fetch_tickers()
                 for sym, t in tickers.items():
-                    if '/USDT' not in sym or sym.startswith('USDC'):
-                        continue
+                    if '/USDT' not in sym or sym.startswith('USDC'): continue
                     coin = sym.split('/')[0]
-                    if coin in BLACKLIST_COINS:
-                        continue
+                    if coin in BLACKLIST_COINS: continue
                     try:
                         vol = t.get('quoteVolume')
                         bid = t.get('bid')
                         ask = t.get('ask')
-                        # Проверка на None и нечисловые значения
-                        if None in (vol, bid, ask):
-                            continue
-                        vol = float(vol)
-                        bid = float(bid)
-                        ask = float(ask)
-                        if vol >= MIN_VOLUME_USD and bid > 0 and ask > 0:
-                            all_tickers.setdefault(sym, {})[ex_id] = {'bid': bid, 'ask': ask}
-                    except (ValueError, TypeError):
-                        continue
-            except:
-                pass
+                        if None in (vol, bid, ask): continue
+                        if float(vol) >= MIN_VOLUME_USD and float(bid) > 0 and float(ask) > 0:
+                            all_tickers.setdefault(sym, {})[ex_id] = {'bid': float(bid), 'ask': float(ask)}
+                    except: continue
+            except: pass
         
         await asyncio.gather(*(fetch_ticker(eid, ex) for eid, ex in exchanges.items()))
         
         fresh_keys = set()
-        logger.info(f"🔄 Скан #{scan_count}: {len(all_tickers)} монет, {len(exchanges)} бирж")
+        logger.info(f"🔄 Скан #{scan_count}: обработано пар: {len(all_tickers)}")
         
         for symbol, data in all_tickers.items():
             coin = symbol.split('/')[0]
-            if len(data) < 2:
-                continue
+            if len(data) < 2: continue
             
-            buy_list = sorted(data.items(), key=lambda x: x[1]['ask'])[:5]
-            sell_list = sorted(data.items(), key=lambda x: x[1]['bid'], reverse=True)[:5]
+            buy_list = sorted(data.items(), key=lambda x: x[1]['ask'])[:3]
+            sell_list = sorted(data.items(), key=lambda x: x[1]['bid'], reverse=True)[:3]
             
             for buy_ex, buy_d in buy_list:
                 for sell_ex, sell_d in sell_list:
-                    if buy_ex == sell_ex:
-                        continue
+                    if buy_ex == sell_ex: continue
                     
                     raw_spread = (sell_d['bid'] - buy_d['ask']) / buy_d['ask'] * 100
-                    if raw_spread < MIN_SPREAD_PCT or raw_spread > MAX_SPREAD_PCT:
-                        continue
+                    if raw_spread < MIN_SPREAD_PCT or raw_spread > MAX_SPREAD_PCT: continue
                     
                     net_info = await check_common_network(exchanges[buy_ex], exchanges[sell_ex], coin)
-                    if not net_info:
-                        continue
                     
                     key = f"{coin}_{buy_ex}_{sell_ex}_{net_info['network']}"
                     fresh_keys.add(key)
                     spread_last_seen[key] = current_time
                     
-                    if key in active_spreads:
-                        continue
+                    if key in active_spreads: continue
                     if key in detected_candidates:
-                        if current_time - detected_candidates[key] < 60:
-                            continue
-                    if key not in detected_candidates:
+                        if current_time - detected_candidates[key] < 60: continue
+                    else:
                         detected_candidates[key] = current_time
                         continue
                     
-                    p_buy, _, buy_fee = await get_order_book_liquidity(exchanges[buy_ex], symbol, 'buy', LIQUIDITY_CHECK_USD)
-                    p_sell, _, sell_fee = await get_order_book_liquidity(exchanges[sell_ex], symbol, 'sell', LIQUIDITY_CHECK_USD)
-                    if not p_buy or not p_sell:
-                        continue
+                    p_buy, _, _ = await get_order_book_liquidity(exchanges[buy_ex], symbol, 'buy', LIQUIDITY_CHECK_USD)
+                    p_sell, _, _ = await get_order_book_liquidity(exchanges[sell_ex], symbol, 'sell', LIQUIDITY_CHECK_USD)
                     
-                    taker_buy = exchanges[buy_ex].market(symbol).get('taker', 0.003)
-                    taker_sell = exchanges[sell_ex].market(symbol).get('taker', 0.003)
-                    b_fee_trade = TRADE_SIZE_USD * taker_buy
-                    s_fee_trade = TRADE_SIZE_USD * taker_sell
+                    if not p_buy or not p_sell: continue
+                    
+                    try:
+                        t_buy = exchanges[buy_ex].market(symbol).get('taker', 0.003)
+                        t_sell = exchanges[sell_ex].market(symbol).get('taker', 0.003)
+                    except: t_buy, t_sell = 0.003, 0.003
+                        
+                    b_fee_trade = TRADE_SIZE_USD * t_buy
+                    s_fee_trade = TRADE_SIZE_USD * t_sell
                     
                     total_fees = b_fee_trade + s_fee_trade + net_info['buy_fee'] + net_info['sell_fee']
                     gross = ((TRADE_SIZE_USD / p_buy) * p_sell - TRADE_SIZE_USD)
@@ -412,76 +369,55 @@ async def scan_all_markets():
                     net_spread = (net_profit / TRADE_SIZE_USD) * 100
                     
                     if net_spread >= MIN_SPREAD_PCT:
-                        # Обновляем статистику
                         exchange_stats[buy_ex]['buy_count'] += 1
                         exchange_stats[buy_ex]['total_profit'] += net_profit / 2
-                        exchange_stats[buy_ex]['last_signal'] = current_time
                         exchange_stats[sell_ex]['sell_count'] += 1
                         exchange_stats[sell_ex]['total_profit'] += net_profit / 2
-                        exchange_stats[sell_ex]['last_signal'] = current_time
                         
-                        # Автоматически обновляем сообщение со статистикой
                         await update_stats_message()
                         
-                        msg = format_signal(coin, buy_ex, sell_ex, p_buy, p_sell,
-                                           b_fee_trade, s_fee_trade, net_info,
-                                           net_profit, net_spread)
+                        message = format_signal(coin, buy_ex, sell_ex, p_buy, p_sell, b_fee_trade, s_fee_trade, net_info, net_profit, net_spread)
                         try:
-                            m = await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown", disable_web_page_preview=True)
+                            m = await bot.send_message(chat_id=CHAT_ID, text=message, parse_mode="Markdown", disable_web_page_preview=True)
                             active_spreads[key] = {
-                                'message_id': m.message_id,
-                                'coin': coin,
-                                'buy_ex': buy_ex,
-                                'sell_ex': sell_ex,
-                                'network': net_info['network'],
-                                'created_at': current_time
+                                'message_id': m.message_id, 'coin': coin, 'buy_ex': buy_ex, 'sell_ex': sell_ex, 'network': net_info['network'], 'created_at': current_time
                             }
                             detected_candidates.pop(key, None)
-                            logger.info(f"✅ СИГНАЛ: {coin} {buy_ex}→{sell_ex} | спред: {net_spread:.2f}% | профит: ${net_profit:.2f}")
                         except Exception as e:
-                            logger.error(f"Ошибка отправки: {e}")
+                            logger.error(f"Ошибка отправки сообщения: {e}")
         
-        # Очистка старых кандидатов
         for k in list(detected_candidates.keys()):
-            if k not in fresh_keys:
-                del detected_candidates[k]
+            if k not in fresh_keys: del detected_candidates[k]
         
-        # Удаление исчезнувших спредов
         to_remove = []
         for k, data in list(active_spreads.items()):
             if k not in fresh_keys:
-                last_seen = spread_last_seen.get(k, 0)
-                if current_time - last_seen > 45:
-                    to_remove.append(k)
+                if current_time - spread_last_seen.get(k, 0) > 45: to_remove.append(k)
         
         for k in to_remove:
-            try:
-                await bot.delete_message(chat_id=CHAT_ID, message_id=active_spreads[k]['message_id'])
-                logger.info(f"🗑️ Удалён спред {active_spreads[k]['coin']}")
-            except:
-                pass
+            try: await bot.delete_message(chat_id=CHAT_ID, message_id=active_spreads[k]['message_id'])
+            except: pass
             active_spreads.pop(k, None)
             spread_last_seen.pop(k, None)
             detected_candidates.pop(k, None)
         
         scan_time = time.time() - scan_start
-        logger.info(f"✅ Скан #{scan_count} завершён за {scan_time:.1f}с | Активных спредов: {len(active_spreads)}")
-        
+        logger.info(f"⚡️ Скан завершен за {scan_time:.1f}с | Активных связок в ТГ: {len(active_spreads)}")
         await asyncio.sleep(15)
 
-# ========== ЗАПУСК ==========
+# ========== ЗАПУСК БОТА ==========
 async def main():
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
+    application = Application.builder().token(TELEGRAM_TOKEN).build()
     
-    app.add_handler(CommandHandler("start", start_command))
-    app.add_handler(CommandHandler("stats", stats_command))
-    app.add_handler(CommandHandler("active", active_command))
-    app.add_handler(CallbackQueryHandler(button_callback))
+    application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("stats", stats_command))
+    application.add_handler(CommandHandler("active", active_command))
+    application.add_handler(CallbackQueryHandler(button_callback))
     
     asyncio.create_task(scan_all_markets())
     
-    logger.info("🚀 Запуск Telegram бота...")
-    await app.run_polling()
+    logger.info("🚀 Бот запущен в Telegram. Начинаю сбор профитных связок...")
+    await application.run_polling()
 
 if __name__ == '__main__':
     asyncio.run(main())
