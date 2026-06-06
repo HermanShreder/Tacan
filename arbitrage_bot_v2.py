@@ -29,7 +29,7 @@ pnl_history = []
 # EXCHANGE
 # =========================
 
-exchange = ccxt.gateio({
+exchange = ccxt.binance({
     "apiKey": API_KEY,
     "secret": API_SECRET,
     "enableRateLimit": True,
