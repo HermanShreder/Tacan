@@ -1,256 +1,159 @@
-import ccxt
+import requests
 import time
-import numpy as np
+from collections import deque
 
 # =========================
 # CONFIG
 # =========================
 
-API_KEY = "hOUVTTBxCFOdKzHUIHBnKYQqKDHgp9VWyvH7ZS0L63kOipp5xncsvnPKM34QQU4E"
-API_SECRET = "PQTTmiOUQFjw6Umm8kCOVMXubF0hfHiriisM1TCd1NhKtQbKealVmBthFEMnrK7t"
-
-SYMBOL = "BTC/USDT"
+SYMBOL = "BTCUSDT"
 
 START_BALANCE = 1000
 
-FEE = 0.001
-SLIPPAGE = 0.0005
+MAKER_FEE = 0.0002   # 0.02%
+TAKER_FEE = 0.001    # 0.1%
 
-MAX_DRAWDOWN = 0.1
+SLIPPAGE = 0.0003
 
 balance = START_BALANCE
-peak = START_BALANCE
+
 position = None
+orders = []
 
-prices = []
-pnl_history = []
-
-# =========================
-# EXCHANGE
-# =========================
-
-exchange = ccxt.binance({
-    "apiKey": API_KEY,
-    "secret": API_SECRET,
-    "enableRateLimit": True,
-    "options": {"defaultType": "spot"}
-})
-
-exchange.set_sandbox_mode(True)
+prices = deque(maxlen=100)
 
 # =========================
-# DATA
+# REAL MARKET DATA
 # =========================
 
-def price():
-    return exchange.fetch_ticker(SYMBOL)["last"]
+def get_price():
+    url = f"https://api.binance.com/api/v3/ticker/price?symbol={SYMBOL}"
+    return float(requests.get(url).json()["price"])
 
-def book():
-    ob = exchange.fetch_order_book(SYMBOL, limit=20)
-    return ob["bids"], ob["asks"]
+def get_orderbook():
+    url = f"https://api.binance.com/api/v3/depth?symbol={SYMBOL}&limit=10"
+    data = requests.get(url).json()
+
+    bids = [(float(p), float(q)) for p, q in data["bids"]]
+    asks = [(float(p), float(q)) for p, q in data["asks"]]
+
+    return bids, asks
 
 # =========================
-# FEATURE LAYER
+# STRATEGY (simple edge)
 # =========================
 
-def imbalance(bids, asks):
-    b = sum([x[1] for x in bids])
-    a = sum([x[1] for x in asks])
-    return (b - a) / (b + a + 1e-9)
-
-def momentum():
-    if len(prices) < 5:
+def signal():
+    if len(prices) < 10:
         return 0
-    return prices[-1] - prices[-3]
 
-def trend():
-    if len(prices) < 20:
-        return 0
-    return np.mean(prices[-5:]) - np.mean(prices[-20:])
-
-def volatility():
-    if len(prices) < 20:
-        return 0
-    return np.std(prices[-20:])
+    return prices[-1] - prices[-5]
 
 # =========================
-# MARKET REGIME (INSTITUTIONAL CORE)
+# ORDER SIZE
 # =========================
 
-def regime():
-    vol = volatility()
-    mom = abs(momentum())
-
-    if vol > 60:
-        return "risk_off"
-    if mom > 12:
-        return "trend"
-    return "mean_reversion"
+def size(price):
+    return (balance * 0.01) / price
 
 # =========================
-# STRATEGY PORTFOLIO (FUND STYLE)
+# MARKET IMPACT SIMULATION
 # =========================
 
-def strat_mean_reversion(bids, asks):
-    return -momentum() * 0.6 + imbalance(bids, asks) * 0.4
+def market_buy(bids, asks, amount):
+    cost = 0
+    remaining = amount
 
-def strat_trend(bids, asks):
-    return trend() * 0.6 + momentum() * 0.4
+    for price, qty in asks:
+        if remaining <= 0:
+            break
 
-def strat_microflow(bids, asks):
-    return imbalance(bids, asks)
+        fill = min(qty, remaining)
+        cost += fill * price
+        remaining -= fill
 
-# =========================
-# STRATEGY ROUTER (ALLOCATION ENGINE)
-# =========================
+    avg_price = cost / amount if amount > 0 else 0
+    return avg_price * (1 + SLIPPAGE)
 
-def ensemble_signal(bids, asks, reg):
-    if reg == "trend":
-        return strat_trend(bids, asks)
+def market_sell(bids, asks, amount):
+    revenue = 0
+    remaining = amount
 
-    if reg == "mean_reversion":
-        return strat_mean_reversion(bids, asks)
+    for price, qty in bids:
+        if remaining <= 0:
+            break
 
-    return strat_microflow(bids, asks)
+        fill = min(qty, remaining)
+        revenue += fill * price
+        remaining -= fill
 
-# =========================
-# EXPECTED VALUE MODEL
-# =========================
-
-def expected_value(sig):
-    vol = volatility()
-    cost = FEE + SLIPPAGE
-    return sig - cost - (vol * 0.01)
-
-# =========================
-# CAPITAL ALLOCATION (INSTITUTIONAL RISK)
-# =========================
-
-def position_size(p, ev):
-    kelly = max(0.1, min(ev, 1))
-    return (balance * 0.01) * kelly / p
+    avg_price = revenue / amount if amount > 0 else 0
+    return avg_price * (1 - SLIPPAGE)
 
 # =========================
-# RISK ENGINE (HEDGE FUND STYLE)
+# EXECUTION
 # =========================
 
-def risk_check():
-    global peak
+def open_long(price, bids, asks):
+    global position, balance
 
-    peak = max(peak, balance)
-    dd = (peak - balance) / peak
+    amount = size(price)
+    exec_price = market_buy(bids, asks, amount)
 
-    return dd < MAX_DRAWDOWN
+    cost = exec_price * amount
+    fee = cost * TAKER_FEE
 
-# =========================
-# EXECUTION LAYER
-# =========================
-
-def buy(p, amount):
-    global position
-
-    exec_price = p * (1 + SLIPPAGE)
-
-    exchange.create_market_buy_order(SYMBOL, amount)
+    balance -= (cost + fee)
 
     position = {
         "entry": exec_price,
-        "amount": amount,
-        "time": time.time()
+        "amount": amount
     }
 
-    print("BUY", exec_price, amount)
+    print("BUY @", exec_price, "amt:", amount)
 
-def sell(p):
-    global balance, position
+def close_long(price, bids, asks):
+    global position, balance
 
-    exec_price = p * (1 - SLIPPAGE)
-
-    entry = position["entry"]
     amount = position["amount"]
 
-    exchange.create_market_sell_order(SYMBOL, amount)
+    exec_price = market_sell(bids, asks, amount)
 
-    pnl = (exec_price - entry) * amount
-    pnl -= (entry + exec_price) * amount * FEE
+    revenue = exec_price * amount
+    fee = revenue * TAKER_FEE
+
+    pnl = revenue - fee - (position["entry"] * amount)
 
     balance += pnl
-    pnl_history.append(pnl)
 
-    print("SELL", exec_price, "PNL:", pnl, "BAL:", balance)
+    print("SELL @", exec_price, "PNL:", pnl, "BAL:", balance)
 
     position = None
-
-# =========================
-# STRATEGY PERFORMANCE SCORING (FUND LOGIC)
-# =========================
-
-def strategy_health():
-    if len(pnl_history) < 10:
-        return 0
-
-    pnl = np.array(pnl_history)
-    return np.mean(pnl) / (np.std(pnl) + 1e-9)
 
 # =========================
 # LOOP
 # =========================
 
-print("INSTITUTIONAL ENGINE STARTED")
+print("PRO SIMULATOR STARTED")
 
 while True:
     try:
-        p = price()
-        bids, asks = book()
+        price = get_price()
+        bids, asks = get_orderbook()
 
-        prices.append(p)
-        if len(prices) > 100:
-            prices.pop(0)
+        prices.append(price)
 
-        reg = regime()
+        sig = signal()
 
-        sig = ensemble_signal(bids, asks, reg)
-        ev = expected_value(sig)
+        print("PRICE:", price, "SIG:", sig, "BAL:", round(balance, 2))
 
-        # dynamic confidence adjustment (fund logic)
-        perf = strategy_health()
-        ev *= (1 + perf)
-
-        # =========================
-        # RISK FILTER
-        # =========================
-
-        if not risk_check():
-            print("DRAWDOWN STOP")
-            time.sleep(2)
-            continue
-
-        # =========================
         # ENTRY
-        # =========================
+        if position is None and sig > 3:
+            open_long(price, bids, asks)
 
-        if position is None:
-            if reg != "risk_off" and ev > 0.25:
-                amt = position_size(p, ev)
-                buy(p, amt)
-
-        # =========================
         # EXIT
-        # =========================
-
-        else:
-            hold = time.time() - position["time"]
-
-            if ev < 0 or reg == "risk_off" or hold > 5:
-                sell(p)
-
-        print(
-            "P:", p,
-            "REG:", reg,
-            "SIG:", round(sig, 4),
-            "EV:", round(ev, 4),
-            "BAL:", round(balance, 2)
-        )
+        elif position is not None and sig < 0:
+            close_long(price, bids, asks)
 
         time.sleep(1)
 
