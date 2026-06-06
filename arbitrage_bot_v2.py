@@ -134,12 +134,35 @@ async def get_order_book_liquidity(exchange, symbol, side, required_usd):
 
 async def check_common_network(buy_exchange, sell_exchange, coin):
     """
-    СТРОГАЯ ПРОВЕРКА: withdraw ДОЛЖЕН БЫТЬ ОТКРЫТ на buy_exchange
-    и deposit ДОЛЖЕН БЫТЬ ОТКРЫТ на sell_exchange
-    Использует стандартные поля CCXT + fallback в 'info' для Binance/Bybit/OKX/Gate
+    УЛЬТРА-СТРОГАЯ ПРОВЕРКА ДЛЯ ВСЕХ БИРЖ (особенно Bitget)
+    withdraw и deposit должны быть явно подтверждены как OPEN
+    Приоритет: info.withdrawEnable / depositEnable (Bitget, Binance и др.)
     """
+    def _is_open(net_info, direction):
+        """Надёжное извлечение статуса для Bitget и других"""
+        if not isinstance(net_info, dict):
+            return False
+        # 1. CCXT normalized
+        val = net_info.get(direction)
+        if val is True or (isinstance(val, str) and val.lower() in ('true', '1', 'yes')):
+            return True
+        # 2. Глубокий поиск в info (Bitget использует withdrawEnable / depositEnable)
+        info = net_info.get('info') or {}
+        if isinstance(info, dict):
+            keys = []
+            if direction == 'withdraw':
+                keys = ['withdrawEnable', 'withdraw_enable', 'canWithdraw', 'can_withdraw', 'withdraw', 'enableWithdraw']
+            else:
+                keys = ['depositEnable', 'deposit_enable', 'canDeposit', 'can_deposit', 'deposit', 'enableDeposit']
+            for k in keys:
+                v = info.get(k)
+                if v is True or (isinstance(v, str) and v.lower() in ('true', '1', 'yes')):
+                    return True
+                if isinstance(v, (int, float)) and v > 0:
+                    return True
+        return False
+
     try:
-        # Гарантируем что currencies загружены
         if not buy_exchange.currencies or coin not in buy_exchange.currencies:
             await buy_exchange.fetch_currencies()
         if not sell_exchange.currencies or coin not in sell_exchange.currencies:
@@ -153,18 +176,7 @@ async def check_common_network(buy_exchange, sell_exchange, coin):
 
         common = []
         for bnet, binfo in buy_nets.items():
-            # Основное поле
-            b_withdraw = bool(binfo.get('withdraw', False))
-            # Fallback для Binance / Bybit / OKX / Gate и др.
-            if not b_withdraw and isinstance(binfo.get('info'), dict):
-                info = binfo['info']
-                b_withdraw = bool(
-                    info.get('withdrawEnable') or 
-                    info.get('can_withdraw') or 
-                    info.get('withdraw', False) or
-                    info.get('enable_withdraw', False)
-                )
-
+            b_withdraw = _is_open(binfo, 'withdraw')
             if not b_withdraw:
                 continue
 
@@ -174,16 +186,7 @@ async def check_common_network(buy_exchange, sell_exchange, coin):
                 if bnet.upper() != snet.upper() and bnet.upper() not in snet.upper():
                     continue
 
-                s_deposit = bool(sinfo.get('deposit', False))
-                if not s_deposit and isinstance(sinfo.get('info'), dict):
-                    info = sinfo['info']
-                    s_deposit = bool(
-                        info.get('depositEnable') or 
-                        info.get('can_deposit') or 
-                        info.get('deposit', False) or
-                        info.get('enable_deposit', False)
-                    )
-
+                s_deposit = _is_open(sinfo, 'deposit')
                 if s_deposit:
                     sfee = float(sinfo.get('fee', 0) or 0)
                     common.append({
@@ -200,7 +203,6 @@ async def check_common_network(buy_exchange, sell_exchange, coin):
             common.sort(key=lambda x: x['total'])
             return common[0]
 
-        # Нет ни одной сети где ОДНОВРЕМЕННО открыт вывод и ввод
         return {
             'network': 'NO OPEN NETWORK',
             'buy_fee': 0, 'sell_fee': 0, 'total': 0,
