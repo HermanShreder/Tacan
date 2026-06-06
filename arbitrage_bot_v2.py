@@ -40,7 +40,9 @@ TELEGRAM_TOKEN = "5814224378:AAHlkQ41I-uQ9XXe_jmn5G28Q2x6nXCVNM8"
 CHAT_ID = "5253808709"
 
 TRADE_SIZE_USD = 500
-MIN_LIQUIDITY_USD = 1000  # ← Новый параметр: минимум 1000$ в стакане
+MIN_LIQUIDITY_USD = 500
+MAX_SLIPPAGE_PCT = 0.45
+MIN_LEVEL_SIZE_USD = 300
 MIN_SPREAD_PCT = 0.3
 MAX_SPREAD_PCT = 15.0
 MIN_VOLUME_USD = 100000
@@ -53,7 +55,31 @@ EXCHANGES_LIST = [
     'coinex', 'whitebit', 'bitrue', 'phemex'
 ]
 
-NETWORKS_INFO = { ... }  # (твой NETWORKS_INFO без изменений, оставил как был)
+NETWORKS_INFO = {
+    'SOL': {'name': 'Solana', 'time_min': 0.03, 'time_max': 0.08, 'fee': 0.0005, 'speed': '⚡', 'risk': 'low', 'recommended': True},
+    'XLM': {'name': 'Stellar', 'time_min': 0.05, 'time_max': 0.08, 'fee': 0.0001, 'speed': '⚡', 'risk': 'low', 'recommended': True},
+    'XRP': {'name': 'Ripple', 'time_min': 0.07, 'time_max': 0.17, 'fee': 0.0005, 'speed': '⚡', 'risk': 'low', 'recommended': True},
+    'ALGO': {'name': 'Algorand', 'time_min': 0.07, 'time_max': 0.08, 'fee': 0.0005, 'speed': '⚡', 'risk': 'low', 'recommended': True},
+    'NEAR': {'name': 'NEAR Protocol', 'time_min': 0.03, 'time_max': 0.08, 'fee': 0.0005, 'speed': '⚡', 'risk': 'low', 'recommended': True},
+    'APT': {'name': 'Aptos', 'time_min': 0.02, 'time_max': 0.05, 'fee': 0.0005, 'speed': '⚡⚡', 'risk': 'low', 'recommended': True},
+    'SUI': {'name': 'Sui', 'time_min': 0.02, 'time_max': 0.05, 'fee': 0.0005, 'speed': '⚡⚡', 'risk': 'low', 'recommended': True},
+    'FTM': {'name': 'Fantom', 'time_min': 0.02, 'time_max': 0.05, 'fee': 0.001, 'speed': '⚡', 'risk': 'low', 'recommended': True},
+    'AVAX': {'name': 'Avalanche C-Chain', 'time_min': 0.03, 'time_max': 0.08, 'fee': 0.05, 'speed': '⚡', 'risk': 'medium', 'recommended': True},
+    'HBAR': {'name': 'Hedera', 'time_min': 0.05, 'time_max': 0.08, 'fee': 0.0001, 'speed': '⚡', 'risk': 'low', 'recommended': True},
+    'MATIC': {'name': 'Polygon', 'time_min': 1, 'time_max': 3, 'fee': 0.02, 'speed': '', 'risk': 'low', 'recommended': True},
+    'ARB': {'name': 'Arbitrum', 'time_min': 1, 'time_max': 2, 'fee': 0.02, 'speed': '', 'risk': 'low', 'recommended': True},
+    'OP': {'name': 'Optimism', 'time_min': 1, 'time_max': 2, 'fee': 0.02, 'speed': '', 'risk': 'low', 'recommended': True},
+    'BASE': {'name': 'Base', 'time_min': 1, 'time_max': 3, 'fee': 0.03, 'speed': '', 'risk': 'low', 'recommended': True},
+    'BNB': {'name': 'BNB Smart Chain', 'time_min': 1, 'time_max': 3, 'fee': 0.15, 'speed': '', 'risk': 'medium', 'recommended': True},
+    'TRX': {'name': 'Tron (TRC-20)', 'time_min': 1, 'time_max': 3, 'fee': 1.50, 'speed': '', 'risk': 'medium', 'recommended': False},
+    'LTC': {'name': 'Litecoin', 'time_min': 5, 'time_max': 10, 'fee': 0.05, 'speed': '', 'risk': 'medium', 'recommended': True},
+    'DOT': {'name': 'Polkadot', 'time_min': 0.17, 'time_max': 0.5, 'fee': 0.10, 'speed': '', 'risk': 'low', 'recommended': True},
+    'ATOM': {'name': 'Cosmos', 'time_min': 0.08, 'time_max': 0.17, 'fee': 0.05, 'speed': '', 'risk': 'low', 'recommended': True},
+    'TON': {'name': 'TON', 'time_min': 0.08, 'time_max': 0.17, 'fee': 0.20, 'speed': '', 'risk': 'medium', 'recommended': True},
+    'ADA': {'name': 'Cardano', 'time_min': 2, 'time_max': 5, 'fee': 0.08, 'speed': '', 'risk': 'low', 'recommended': True},
+    'BTC': {'name': 'Bitcoin', 'time_min': 10, 'time_max': 60, 'fee': 2.50, 'speed': '', 'risk': 'low', 'recommended': False},
+    'ETH': {'name': 'Ethereum', 'time_min': 1, 'time_max': 15, 'fee': 10.0, 'speed': '', 'risk': 'medium', 'recommended': False},
+}
 
 exchange_stats = defaultdict(lambda: {'buy_count': 0, 'sell_count': 0, 'total_profit': 0})
 active_spreads = {}
@@ -64,7 +90,7 @@ class HealthCheckServer(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-type", "text/html")
         self.end_headers()
-        self.wfile.write(b"WS Arbitrage Bot RUNNING - Liquidity Check Enabled")
+        self.wfile.write(b"ANTI-SPOOF + TRADE HISTORY | MIN_LIQUIDITY = 500 USD")
 
 def run_health_server():
     try:
@@ -79,11 +105,48 @@ def get_network_info(network_name):
             return info
     return {'name': network_name, 'time_min': 5, 'time_max': 15, 'fee': 0.5, 'speed': '', 'risk': 'unknown', 'recommended': False}
 
+async def fetch_recent_trades(exchange, symbol, limit=80):
+    try:
+        trades = await exchange.fetch_trades(symbol, limit=limit)
+        return trades[-60:]
+    except:
+        return []
+
+async def analyze_trade_history(exchange, symbol):
+    trades = await fetch_recent_trades(exchange, symbol)
+    if len(trades) < 15:
+        return 0.4
+    total_vol = sum(float(t.get('amount', 0)) * float(t.get('price', 0)) for t in trades)
+    aggressive = total_vol
+    burst = 1 if total_vol > 600 else 0.5
+    return min(1.0, (aggressive / max(total_vol, 1)) * burst * (len(trades) / 40))
+
+async def detect_spoof_walls(orderbook, side):
+    orders = orderbook['asks'] if side == 'buy' else orderbook['bids']
+    spoof_score = 0
+    for i, level in enumerate(orders[:8]):
+        price = float(level[0])
+        vol = float(level[1])
+        level_usd = price * vol
+        if level_usd > 800 and i < 3:
+            spoof_score += 0.6
+        if level_usd > 1500 and (i == 0 or i == 1):
+            spoof_score += 0.8
+    return max(0, 1.0 - spoof_score / 3)
+
 async def get_order_book_depth(exchange, symbol, side, amount_usd):
     try:
-        orderbook = await exchange.fetch_order_book(symbol, limit=30)  # увеличил лимит
+        orderbook = await exchange.fetch_order_book(symbol, limit=40)
         orders = orderbook['asks'] if side == 'buy' else orderbook['bids']
-        if not orders or len(orders) == 0:
+        if not orders:
+            return None, 0, 0
+
+        spoof_factor = await detect_spoof_walls(orderbook, side)
+        trade_trust = await analyze_trade_history(exchange, symbol)
+        overall_trust = (spoof_factor + trade_trust) / 2
+
+        if overall_trust < 0.52:
+            logger.info(f"LOW TRUST {symbol} {side}")
             return None, 0, 0
 
         market = exchange.market(symbol)
@@ -91,42 +154,38 @@ async def get_order_book_depth(exchange, symbol, side, amount_usd):
 
         total_cost = 0.0
         total_amount = 0.0
-        total_available_liquidity = 0.0  # Считаем общую ликвидность в топе
+        total_liq = 0.0
+        best_price = float(orders[0][0])
 
         for level in orders:
-            if not level or len(level) < 2: continue
-            price = float(level[0] or 0)
-            volume = float(level[1] or 0)
+            price = float(level[0])
+            volume = float(level[1])
             if price == 0 or volume == 0: continue
+            level_usd = price * volume
+            total_liq += level_usd
 
-            level_cost = price * volume
-            total_available_liquidity += level_cost
+            slippage = abs((price - best_price) / best_price) * 100
+            if slippage > MAX_SLIPPAGE_PCT: break
 
-            if total_cost + level_cost >= amount_usd:
-                needed_usd = amount_usd - total_cost
-                total_amount += needed_usd / price
-                total_cost += needed_usd
+            if level_usd < MIN_LEVEL_SIZE_USD and total_cost < 350: continue
+
+            if total_cost + level_usd >= amount_usd:
+                needed = amount_usd - total_cost
+                total_amount += needed / price
+                total_cost += needed
                 break
             else:
                 total_amount += volume
-                total_cost += level_cost
+                total_cost += level_usd
 
-        # ЖЁСТКАЯ ПРОВЕРКА ЛИКВИДНОСТИ
-        if total_available_liquidity < MIN_LIQUIDITY_USD or total_cost < amount_usd * 0.95:
-            logger.info(f"Недостаточная ликвидность {symbol} на {exchange.id} ({total_available_liquidity:.0f}$)")
-            return None, 0, 0
-
-        if total_amount == 0:
+        if total_liq < MIN_LIQUIDITY_USD or total_cost < amount_usd * 0.9:
             return None, 0, 0
 
         avg_price = total_cost / total_amount
         return avg_price, total_cost, (amount_usd * taker_fee)
     except Exception as e:
-        logger.warning(f"Orderbook error {symbol}: {e}")
+        logger.warning(f"Depth error {symbol}: {e}")
         return None, 0, 0
-
-# Остальные функции (check_withdrawal_network, generate_buy_link, format_signal_text, watch..., process..., main_scanner) — БЕЗ ИЗМЕНЕНИЙ
-# (Они такие же как в твоём последнем коде)
 
 async def check_withdrawal_network(exchange, coin):
     try:
@@ -308,7 +367,6 @@ async def main_scanner():
             logger.warning(f"✗ {ex_id}: {e}")
     while True:
         try:
-            current_time = time.time()
             fresh_keys = set()
             for symbol, data in list(global_tickers.items()):
                 await process_single_symbol(symbol, data, exchanges, fresh_keys)
