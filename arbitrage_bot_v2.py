@@ -6,8 +6,8 @@ import numpy as np
 # CONFIG
 # =========================
 
-API_KEY = "PUT_KEY"
-API_SECRET = "PUT_SECRET"
+API_KEY = "0986dfa480a2ffe13627f24de011fcc0"
+API_SECRET = "89bf4a4ab66704d68c9bf40d9bb3448180545209434e49d769fafa9456b86834"
 
 SYMBOL = "BTC/USDT"
 
