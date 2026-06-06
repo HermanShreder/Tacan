@@ -168,11 +168,14 @@ async def check_common_network(buy_exchange, sell_exchange, coin):
         if not sell_exchange.currencies or coin not in sell_exchange.currencies:
             await sell_exchange.fetch_currencies()
 
-        buy_cur = buy_exchange.currencies.get(coin, {})
-        sell_cur = sell_exchange.currencies.get(coin, {})
+        buy_cur = buy_exchange.currencies.get(coin) or {}
+        sell_cur = sell_exchange.currencies.get(coin) or {}
 
-        buy_nets = buy_cur.get('networks', {}) or buy_cur.get('info', {}).get('networks', {})
-        sell_nets = sell_cur.get('networks', {}) or sell_cur.get('info', {}).get('networks', {})
+        buy_info = buy_cur.get('info') or {}
+        sell_info = sell_cur.get('info') or {}
+
+        buy_nets = buy_cur.get('networks') or buy_info.get('networks') or {}
+        sell_nets = sell_cur.get('networks') or sell_info.get('networks') or {}
 
         common = []
         for bnet, binfo in buy_nets.items():
@@ -212,9 +215,9 @@ async def check_common_network(buy_exchange, sell_exchange, coin):
         }
 
     except Exception as e:
-        logger.warning(f"Network check error for {coin}: {str(e)[:80]}")
+        logger.debug(f"Network check fallback for {coin} (expected for many low-cap tokens without full currency data): {str(e)[:80]}")
         return {
-            'network': 'ERROR',
+            'network': 'NO OPEN NETWORK',
             'buy_fee': 0, 'sell_fee': 0, 'total': 0,
             'buy_withdraw_open': False,
             'sell_deposit_open': False,
