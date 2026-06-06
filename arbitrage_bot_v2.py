@@ -6,7 +6,6 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 import time
 from datetime import datetime
 from collections import defaultdict
-import json
 
 # === НАСТРОЙКИ ===
 TELEGRAM_TOKEN = "5814224378:AAHlkQ41I-uQ9XXe_jmn5G28Q2x6nXCVNM8"
@@ -23,22 +22,21 @@ LIQUIDITY_CHECK_USD = 1000
 MIN_SPREAD_PCT = 0.5
 MAX_SPREAD_PCT = 200.0
 MIN_VOLUME_USD = 50000
-MAX_WITHDRAWAL_TIME_MIN = 60
 
 BLACKLIST_COINS = {'KEY', 'STAR', 'BOND', 'MIRA', 'WILD', 'MAGIC', 'NATIVE'}
 
 NETWORKS_INFO = {
-    'SOL': {'time_min': 0.03, 'time_max': 0.08, 'fee': 0.0005, 'speed': '⚡️⚡️⚡️', 'recommended': True},
-    'XLM': {'time_min': 0.05, 'time_max': 0.08, 'fee': 0.0001, 'speed': '⚡️⚡️⚡️', 'recommended': True},
-    'XRP': {'time_min': 0.07, 'time_max': 0.17, 'fee': 0.0005, 'speed': '⚡️⚡️⚡️', 'recommended': True},
-    'BEP20': {'time_min': 1, 'time_max': 3, 'fee': 0.02, 'speed': '🟢', 'recommended': True},
-    'BSC': {'time_min': 1, 'time_max': 3, 'fee': 0.02, 'speed': '🟢', 'recommended': True},
-    'ERC20': {'time_min': 5, 'time_max': 15, 'fee': 8.0, 'speed': '🔴', 'recommended': False},
-    'TRC20': {'time_min': 1, 'time_max': 3, 'fee': 1.50, 'speed': '🟢', 'recommended': True},
-    'MATIC': {'time_min': 1, 'time_max': 3, 'fee': 0.02, 'speed': '🟢', 'recommended': True},
-    'ARB': {'time_min': 1, 'time_max': 2, 'fee': 0.02, 'speed': '🟢', 'recommended': True},
-    'OP': {'time_min': 1, 'time_max': 2, 'fee': 0.02, 'speed': '🟢', 'recommended': True},
-    'DOGE': {'time_min': 2, 'time_max': 5, 'fee': 0.5, 'speed': '🟡', 'recommended': True},
+    'SOL': {'time_min': 0.03, 'time_max': 0.08, 'fee': 0.0005, 'speed': '⚡️⚡️⚡️'},
+    'XLM': {'time_min': 0.05, 'time_max': 0.08, 'fee': 0.0001, 'speed': '⚡️⚡️⚡️'},
+    'XRP': {'time_min': 0.07, 'time_max': 0.17, 'fee': 0.0005, 'speed': '⚡️⚡️⚡️'},
+    'BEP20': {'time_min': 1, 'time_max': 3, 'fee': 0.02, 'speed': '🟢'},
+    'BSC': {'time_min': 1, 'time_max': 3, 'fee': 0.02, 'speed': '🟢'},
+    'ERC20': {'time_min': 5, 'time_max': 15, 'fee': 8.0, 'speed': '🔴'},
+    'TRC20': {'time_min': 1, 'time_max': 3, 'fee': 1.50, 'speed': '🟢'},
+    'MATIC': {'time_min': 1, 'time_max': 3, 'fee': 0.02, 'speed': '🟢'},
+    'ARB': {'time_min': 1, 'time_max': 2, 'fee': 0.02, 'speed': '🟢'},
+    'OP': {'time_min': 1, 'time_max': 2, 'fee': 0.02, 'speed': '🟢'},
+    'DOGE': {'time_min': 2, 'time_max': 5, 'fee': 0.5, 'speed': '🟡'},
 }
 
 # Глобальные переменные
@@ -59,7 +57,7 @@ def get_network_info(network_name):
     for key, info in NETWORKS_INFO.items():
         if key.upper() == network or network in key.upper():
             return {**info, 'network': key}
-    return {'time_min': 5, 'time_max': 15, 'fee': 0.5, 'speed': '❓', 'recommended': False, 'network': network_name}
+    return {'time_min': 5, 'time_max': 15, 'fee': 0.5, 'speed': '❓', 'network': network_name}
 
 def generate_deeplink(exchange, coin):
     pair = f"{coin}_USDT".upper()
@@ -95,8 +93,7 @@ async def get_order_book_liquidity(exchange, symbol, side, required_usd):
     try:
         orderbook = await exchange.fetch_order_book(symbol, limit=20)
         orders = orderbook['asks'] if side == 'buy' else orderbook['bids']
-        if not orders:
-            return None, 0, 0
+        if not orders: return None, 0, 0
             
         try: taker_fee = exchange.market(symbol).get('taker', 0.003)
         except: taker_fee = 0.003
@@ -113,14 +110,12 @@ async def get_order_book_liquidity(exchange, symbol, side, required_usd):
                 total_amount += volume
                 total_cost += level_usd
                 
-        if total_cost < required_usd or total_amount == 0:
-            return None, 0, 0
+        if total_cost < required_usd or total_amount == 0: return None, 0, 0
         return (total_cost / total_amount), total_cost, (required_usd * taker_fee)
     except:
         return None, 0, 0
 
 async def check_common_network(buy_exchange, sell_exchange, coin):
-    """Исправленный шлюз сетей. Больше не дропает спреды из-за ошибок API."""
     try:
         if hasattr(buy_exchange, 'currencies') and coin in buy_exchange.currencies:
             cur_buy = buy_exchange.currencies
@@ -160,7 +155,6 @@ def format_signal(coin, buy_ex, sell_ex, p_buy, p_sell, buy_fee, sell_fee, net_i
     link_buy = generate_deeplink(buy_ex, coin)
     link_sell = generate_deeplink(sell_ex, coin)
     net_details = get_network_info(net_info['network'])
-    
     net_status = "⚠️ ПРОВЕРИТЬ СЕТЬ РУКАМИ" if net_info.get('is_fallback') else f"✅ Совпадение в сети {net_info['network']}"
     
     return (
@@ -178,8 +172,8 @@ def format_signal(coin, buy_ex, sell_ex, p_buy, p_sell, buy_fee, sell_fee, net_i
         f"📦 **СЕТЬ ПЕРЕВОДА: {net_info['network']}**\n"
         f"├ 📤 Вывод ({buy_ex.upper()}): `${net_info['buy_fee']:.2f}`\n"
         f"├ 📥 Депозит ({sell_ex.upper()}): `${net_info['sell_fee']:.2f}`\n"
-        f"├ ⏱ Время: {net_details['time_min']}-{net_details['time_max']} мин\n"
-        f"└ 🏁 Скорость: {net_details['speed']}\n"
+        f"├ ⏱ Время: {net_details.get('time_min', 5)}-{net_details.get('time_max', 15)} мин\n"
+        f"└ 🏁 Скорость: {net_details.get('speed', '❓')}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"💸 **КОМИССИИ:**\n"
         f"├ 📊 Торговые: `${buy_fee + sell_fee:.2f}`\n"
@@ -405,19 +399,25 @@ async def scan_all_markets():
         logger.info(f"⚡️ Скан завершен за {scan_time:.1f}с | Активных связок в ТГ: {len(active_spreads)}")
         await asyncio.sleep(15)
 
-# ========== ЗАПУСК БОТА ==========
-async def main():
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
+# ========== ХУК ИНИЦИАЛИЗАЦИИ ==========
+async def post_init(application: Application) -> None:
+    # Запускаем фоновую задачу сканирования в правильном event loop бота
+    asyncio.create_task(scan_all_markets())
+    logger.info("🚀 Фоновая задача сканирования рынков успешно зарегистрирована.")
+
+# ========== ЗАПУСК БОТА (СИНХРОННЫЙ ТОЧКА ВХОДА) ==========
+def main():
+    # Передаем наш хук post_init при сборке приложения
+    application = Application.builder().token(TELEGRAM_TOKEN).post_init(post_init).build()
     
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("stats", stats_command))
     application.add_handler(CommandHandler("active", active_command))
     application.add_handler(CallbackQueryHandler(button_callback))
     
-    asyncio.create_task(scan_all_markets())
-    
-    logger.info("🚀 Бот запущен в Telegram. Начинаю сбор профитных связок...")
-    await application.run_polling()
+    logger.info("🚀 Запуск Telegram Polling... Начинаю сбор профитных связок...")
+    # run_polling() сама создаст loop, запустит post_init, и заблокирует поток для работы бота
+    application.run_polling()
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    main()
