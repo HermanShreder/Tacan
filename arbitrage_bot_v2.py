@@ -20,7 +20,6 @@ import os
 import time
 import logging
 import numpy as np
-import pandas as pd
 from datetime import datetime
 from typing import Dict, List, Tuple, Optional, Any
 from collections import deque
@@ -339,7 +338,7 @@ class CorrelationAnalyzer:
         self.symbols = symbols
         self.window = window
         self.price_vectors = {sym: deque(maxlen=window) for sym in symbols}
-        self.corr_matrix = pd.DataFrame(index=symbols, columns=symbols)
+        self.corr_matrix = {s1: {s2: 0.0 for s2 in symbols} for s1 in symbols}
         
     def update_prices(self, symbol: str, price: float):
         self.price_vectors[symbol].append(price)
@@ -347,13 +346,17 @@ class CorrelationAnalyzer:
             self._compute_correlations()
             
     def _compute_correlations(self):
-        df = pd.DataFrame({sym: list(vec) for sym, vec in self.price_vectors.items()})
-        corr = df.corr()
-        self.corr_matrix = corr
+        # Pure numpy correlation replacement
+        symbols_list = list(self.price_vectors.keys())
+        n = len(symbols_list)
+        prices = np.array([list(self.price_vectors[s]) for s in symbols_list])
+        # Compute correlation matrix manually
+        corr_matrix = np.corrcoef(prices)
+        self.corr_matrix = {symbols_list[i]: {symbols_list[j]: corr_matrix[i,j] for j in range(n)} for i in range(n)}
         
     def get_correlation(self, sym1: str, sym2: str) -> float:
-        if sym1 in self.corr_matrix.index and sym2 in self.corr_matrix.columns:
-            return self.corr_matrix.loc[sym1, sym2]
+        if sym1 in self.corr_matrix and sym2 in self.corr_matrix[sym1]:
+            return self.corr_matrix[sym1][sym2]
         return 0.0
     
     def is_diverging(self, sym1: str, sym2: str, zscore_thresh=2.0) -> bool:
@@ -560,7 +563,7 @@ class MicroScalperBot:
             await self.exchange.close()
             
     # ----------------------- Backtesting Engine -----------------------
-    async def backtest(self, historical_data: pd.DataFrame):
+    async def backtest(self, historical_data):  # historical_data: list of dicts or np.array instead of pd.DataFrame
         """
         Run backtest on historical OHLCV + order book snapshots (mock)
         Returns equity curve and metrics.
@@ -571,10 +574,11 @@ class MicroScalperBot:
         balance = 1000.0
         equity_curve = []
         for i in range(1, len(historical_data)):
-            price = historical_data['close'].iloc[i]
+            price = historical_data['close'].iloc[i] if hasattr(historical_data, 'iloc') else historical_data[i]['close']
             # very simple strategy: buy if price up 0.1% from previous close, sell after 0.05%
             # (mimicking micro scalping)
-            if price > historical_data['close'].iloc[i-1] * 1.001:
+            prev_price = historical_data['close'].iloc[i-1] if hasattr(historical_data, 'iloc') else historical_data[i-1]['close']
+            if price > prev_price * 1.001:
                 amount = TRADE_AMOUNT_USDT
                 qty = amount / price
                 # apply commission
