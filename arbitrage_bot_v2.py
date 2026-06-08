@@ -47,9 +47,9 @@ VOLATILITY_TIMEOUT_SEC = 300
 VOLATILITY_THRESHOLD_PCT = 1.5
 VOLATILITY_LOOKBACK_SEC = 60
 
-# Дневные лимиты
-DAILY_LOSS_LIMIT_PCT = 5.0        # при достижении просадки 5% за день – остановка
-DAILY_PROFIT_TARGET_PCT = 3.0     # цель 3% в день – снижаем риск
+# Дневные лимиты (теперь считаются по equity)
+DAILY_LOSS_LIMIT_PCT = 5.0        # при реальной просадке 5% – остановка
+DAILY_PROFIT_TARGET_PCT = 3.0     # цель 3% – снижаем риск
 
 # Новостной модуль
 NEWS_API_KEY = "YOUR_CRYPTOPANIC_API_KEY"
@@ -94,15 +94,60 @@ news_orders = []
 news_balance_reserved = 0.0
 last_news_time = 0
 
-peak_balance = INITIAL_BALANCE
+# Для расчёта просадки и дневных лимитов (теперь по equity)
+peak_equity = INITIAL_BALANCE
 max_drawdown = 0.0
 trade_history = []
-daily_start_balance = INITIAL_BALANCE
+daily_start_equity = INITIAL_BALANCE
 last_reset_day = datetime.now().day
+current_risk_per_trade = RISK_PER_TRADE   # динамический риск
 
 # =========================
-# ВЕБСОКЕТ
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ EQUITY
 # =========================
+def get_total_equity(current_price):
+    """Общий капитал: свободный баланс + рыночная стоимость всех открытых позиций"""
+    equity = balance
+    for pos in positions:
+        equity += pos['amount'] * current_price
+    return equity
+
+def update_drawdown(current_price):
+    global peak_equity, max_drawdown
+    total_equity = get_total_equity(current_price)
+    if total_equity > peak_equity:
+        peak_equity = total_equity
+    dd = (peak_equity - total_equity) / peak_equity * 100
+    if dd > max_drawdown:
+        max_drawdown = dd
+    return dd
+
+def check_daily_limits(current_price):
+    global daily_start_equity, last_reset_day, current_risk_per_trade
+    today = datetime.now().day
+    total_equity = get_total_equity(current_price)
+    if today != last_reset_day:
+        daily_start_equity = total_equity
+        last_reset_day = today
+        log_event(f"📅 Новый день. Стартовый капитал: {daily_start_equity:.2f} USDT")
+        return True
+    daily_pnl = total_equity - daily_start_equity
+    daily_pnl_pct = (daily_pnl / daily_start_equity) * 100
+    if daily_pnl_pct <= -DAILY_LOSS_LIMIT_PCT:
+        log_event(f"❌ Дневной убыток {daily_pnl_pct:.2f}% превысил лимит {DAILY_LOSS_LIMIT_PCT}%. Остановка.")
+        cancel_all_orders()
+        return False
+    if daily_pnl_pct >= DAILY_PROFIT_TARGET_PCT:
+        new_risk = current_risk_per_trade * 0.5
+        if new_risk != current_risk_per_trade:
+            log_event(f"✅ Цель {DAILY_PROFIT_TARGET_PCT}% достигнута. Снижаем риск {current_risk_per_trade*100:.0f}% → {new_risk*100:.0f}%")
+            current_risk_per_trade = new_risk
+    return True
+
+# =========================
+# ОСТАЛЬНЫЕ ФУНКЦИИ (БЕЗ ИЗМЕНЕНИЙ, КРОМЕ ВЫЗОВОВ update_drawdown И check_daily_limits)
+# =========================
+# ВЕБСОКЕТ
 def on_message(ws, msg):
     global orderbook
     try:
@@ -121,9 +166,7 @@ def start_websocket():
 
 threading.Thread(target=start_websocket, daemon=True).start()
 
-# =========================
 # ИНДИКАТОРЫ
-# =========================
 def get_indicators():
     ohlcv = exchange.fetch_ohlcv(SYMBOL, "5m", limit=200)
     df = pd.DataFrame(ohlcv, columns=["ts", "o", "h", "l", "c", "v"])
@@ -145,11 +188,8 @@ def get_indicators():
     df["atr"] = tr.rolling(14).mean()
     return df.dropna()
 
-# =========================
-# ДИНАМИЧЕСКИЕ УРОВНИ ИЗ ОРДЕРБУКА (С ОЦЕНКОЙ СИЛЫ)
-# =========================
+# ДИНАМИЧЕСКИЕ УРОВНИ ИЗ ОРДЕРБУКА
 def detect_clusters_with_strength(orderbook_side):
-    """Возвращает список словарей с ценой, силой и временем первого появления"""
     if not orderbook_side:
         return []
     levels = [(float(p), float(v)) for p, v in orderbook_side[:ORDERBOOK_DEPTH]]
@@ -218,9 +258,7 @@ def find_best_resistance(current_price):
     best = min(candidates, key=lambda x: (x['price'] - current_price) / (x['strength'] + 0.1))
     return best
 
-# =========================
-# ДИНАМИЧЕСКИЕ УРОВНИ ИЗ ЦЕНЫ (локальные экстремумы)
-# =========================
+# УРОВНИ ИЗ ЦЕНЫ
 def find_local_extrema(df, order=10):
     high_points = argrelextrema(df['c'].values, np.greater, order=order)[0]
     low_points = argrelextrema(df['c'].values, np.less, order=order)[0]
@@ -241,18 +279,7 @@ def merge_levels_with_price_extrema():
         if not any(abs(pr - r['price']) < 10 for r in resistance_levels):
             resistance_levels.append({'price': pr, 'strength': 0.8, 'first_seen': time.time(), 'current_vol': 0})
 
-# =========================
-# ЛОГИРОВАНИЕ И СТАТИСТИКА
-# =========================
-def update_drawdown(current_balance):
-    global peak_balance, max_drawdown
-    if current_balance > peak_balance:
-        peak_balance = current_balance
-    dd = (peak_balance - current_balance) / peak_balance * 100
-    if dd > max_drawdown:
-        max_drawdown = dd
-    return dd
-
+# ЛОГИРОВАНИЕ
 def log_trade(entry_price, exit_price, pnl, pnl_pct, reason):
     global trade_history
     trade = {
@@ -278,7 +305,7 @@ def log_event(message):
         f.write(f"{datetime.now()} | {message}\n")
     print(message)
 
-def compute_statistics():
+def compute_statistics(current_price):
     if len(trade_history) == 0:
         return
     pnl_pcts = [t['pnl_pct'] for t in trade_history]
@@ -287,7 +314,7 @@ def compute_statistics():
     winrate = len(wins)/len(pnl_pcts)*100 if pnl_pcts else 0
     avg_win = np.mean(wins) if wins else 0
     avg_loss = np.mean(losses) if losses else 0
-    total_return = (balance - INITIAL_BALANCE) / INITIAL_BALANCE * 100
+    total_return = (get_total_equity(current_price) - INITIAL_BALANCE) / INITIAL_BALANCE * 100
     stats = f"""
     ========== СТАТИСТИКА СТРАТЕГИИ ==========
     Всего сделок: {len(trade_history)}
@@ -297,7 +324,7 @@ def compute_statistics():
     Максимальная просадка: {max_drawdown:.2f}%
     Общий PnL: {total_pnl:.2f} USDT
     Общая доходность: {total_return:.2f}%
-    Текущий баланс: {balance:.2f} USDT
+    Текущий капитал: {get_total_equity(current_price):.2f} USDT
     ==========================================
     """
     with open("statistics.txt", "w", encoding='utf-8') as f:
@@ -305,33 +332,7 @@ def compute_statistics():
     print(stats)
     bot.send_message(CHAT_ID, stats)
 
-# =========================
-# ДНЕВНЫЕ ЛИМИТЫ
-# =========================
-def check_daily_limits():
-    global daily_start_balance, last_reset_day, RISK_PER_TRADE
-    today = datetime.now().day
-    if today != last_reset_day:
-        daily_start_balance = balance
-        last_reset_day = today
-        log_event(f"📅 Новый день. Стартовый баланс: {balance:.2f} USDT")
-        return True
-    daily_pnl = balance - daily_start_balance
-    daily_pnl_pct = (daily_pnl / daily_start_balance) * 100
-    if daily_pnl_pct <= -DAILY_LOSS_LIMIT_PCT:
-        log_event(f"❌ Дневной убыток {daily_pnl_pct:.2f}% превысил лимит {DAILY_LOSS_LIMIT_PCT}%. Остановка.")
-        cancel_all_orders()
-        return False
-    if daily_pnl_pct >= DAILY_PROFIT_TARGET_PCT:
-        new_risk = RISK_PER_TRADE * 0.5
-        if new_risk != RISK_PER_TRADE:
-            log_event(f"✅ Цель {DAILY_PROFIT_TARGET_PCT}% достигнута. Снижаем риск {RISK_PER_TRADE*100:.0f}% → {new_risk*100:.0f}%")
-            RISK_PER_TRADE = new_risk
-    return True
-
-# =========================
 # ЗАЩИТА ОТ ВОЛАТИЛЬНОСТИ
-# =========================
 def check_volatility_timeout(current_price):
     global volatility_pause_until, last_price, last_price_time
     now = time.time()
@@ -350,9 +351,7 @@ def check_volatility_timeout(current_price):
 def is_volatility_paused():
     return time.time() < volatility_pause_until
 
-# =========================
-# НОВОСТНОЙ МОДУЛЬ (БЕЗ СТОП-ЛОССА)
-# =========================
+# НОВОСТНОЙ МОДУЛЬ
 def fetch_news():
     url = f"https://cryptopanic.com/api/v1/posts/?auth_token={NEWS_API_KEY}&currencies=BTC&kind=news"
     try:
@@ -458,9 +457,7 @@ def cancel_news_grid():
         news_balance_reserved = 0
         log_event("Новостная сетка отменена")
 
-# =========================
-# ДИНАМИЧЕСКИЙ ТЕЙК-ПРОФИТ (БЕЗ СТОП-ЛОССА)
-# =========================
+# ТЕЙК-ПРОФИТ
 def find_nearest_resistance_above(price):
     best = find_best_resistance(price)
     return best['price'] if best else None
@@ -486,10 +483,8 @@ def calculate_take_profit(entry_price, atr):
             tp = max_tp
         return tp
 
-# =========================
-# УПРАВЛЕНИЕ ПОЗИЦИЯМИ И ОРДЕРАМИ (БЕЗ СТОПОВ)
-# =========================
-def close_position(pos, exit_price, reason):
+# УПРАВЛЕНИЕ ПОЗИЦИЯМИ
+def close_position(pos, exit_price, reason, current_price_for_equity):
     global balance, total_pnl
     revenue = exit_price * pos['amount']
     commission_sell = revenue * COMMISSION
@@ -499,7 +494,7 @@ def close_position(pos, exit_price, reason):
     total_pnl += pnl
     pnl_pct = (pnl / pos['cost']) * 100
     log_trade(pos['entry_price'], exit_price, pnl, pnl_pct, reason)
-    update_drawdown(balance)
+    update_drawdown(current_price_for_equity)  # обновим просадку после закрытия
     msg = (f"\n🔒 ЗАКРЫТА ПОЗИЦИЯ [{reason}]\n"
            f"   Вход {pos['entry_price']:.2f} → Выход {exit_price:.2f}\n"
            f"   PnL: {pnl:.2f} USDT ({pnl_pct:.2f}%)\n"
@@ -520,7 +515,7 @@ def add_pending_order(price, current_balance, current_price, atr):
     if total_allocated / current_balance > MAX_TOTAL_RISK:
         log_event(f"⚠️ Лимит загрузки капитала {MAX_TOTAL_RISK*100:.0f}%")
         return False
-    pos_size = current_balance * RISK_PER_TRADE
+    pos_size = current_balance * current_risk_per_trade
     if pos_size < 10:
         return False
     amount_btc = pos_size / price
@@ -589,9 +584,7 @@ def cancel_all_orders():
     cancel_all_pending_orders()
     cancel_news_grid()
 
-# =========================
 # СИГНАЛ НА ПОКУПКУ
-# =========================
 def evaluate_buy_signal(current_price, df, best_support):
     last = df.iloc[-1]
     rsi = last['rsi']
@@ -625,9 +618,9 @@ def evaluate_buy_signal(current_price, df, best_support):
 # ОСНОВНОЙ ЦИКЛ
 # =========================
 def main():
-    global volatility_pause_until, last_price, last_price_time, RISK_PER_TRADE
-    print("🚀 СИМУЛЯТОР (БЕЗ СТОП-ЛОССОВ, ТОЛЬКО ТЕЙК-ПРОФИТ) ЗАПУЩЕН")
-    bot.send_message(CHAT_ID, "🚀 Запущен симулятор: только покупки по индикаторам+поддержкам, тейк-профит, без стоп-лоссов")
+    global volatility_pause_until, last_price, last_price_time, current_risk_per_trade
+    print("🚀 СИМУЛЯТОР (БЕЗ СТОП-ЛОССОВ, ПРАВИЛЬНЫЙ РАСЧЁТ ПРОСАДКИ) ЗАПУЩЕН")
+    bot.send_message(CHAT_ID, "🚀 Запущен финальный симулятор: корректный учёт капитала, дневные лимиты по equity")
     time.sleep(2)
     update_support_resistance_dynamic()
     merge_levels_with_price_extrema()
@@ -639,7 +632,8 @@ def main():
             current_price = df["c"].iloc[-1]
             last = df.iloc[-1]
             
-            if not check_daily_limits():
+            # Проверка дневных лимитов по equity
+            if not check_daily_limits(current_price):
                 time.sleep(60)
                 continue
             
@@ -657,7 +651,7 @@ def main():
                 if time.time() - last_merge_time > 1800:
                     merge_levels_with_price_extrema()
                     last_merge_time = time.time()
-                # Корректируем тейк-профиты открытых позиций
+                # Корректируем TP открытых позиций
                 for pos in positions:
                     old_tp = pos['take_profit']
                     new_tp = calculate_take_profit(pos['entry_price'], None)
@@ -670,13 +664,13 @@ def main():
             # Закрытие по тейк-профиту или перекупленности
             for pos in positions[:]:
                 if current_price >= pos['take_profit']:
-                    close_position(pos, current_price, "Тейк-профит")
+                    close_position(pos, current_price, "Тейк-профит", current_price)
                     positions.remove(pos)
                 else:
                     rsi = last['rsi']
                     bb_upper = last['bb_upper']
                     if rsi > RSI_OVERBOUGHT and current_price > bb_upper:
-                        close_position(pos, current_price, "RSI перекуплен + верхняя полоса")
+                        close_position(pos, current_price, "RSI перекуплен + верхняя полоса", current_price)
                         positions.remove(pos)
             
             # Новые ордера
@@ -691,7 +685,9 @@ def main():
                         bot.send_message(CHAT_ID, msg)
                         log_event(msg)
             
-            update_drawdown(balance)
+            # Отображение состояния
+            total_equity = get_total_equity(current_price)
+            update_drawdown(current_price)
             print(f"\n{'='*80}")
             print(f"🕒 {datetime.now().strftime('%H:%M:%S')} | Цена BTC: {current_price:.2f} USDT")
             print(f"📊 RSI={last['rsi']:.1f} | BB низ={last['bb_lower']:.0f} верх={last['bb_upper']:.0f}")
@@ -704,7 +700,8 @@ def main():
                 best_r = find_best_resistance(current_price)
                 if best_r:
                     print(f"⚔️ Лучшее сопротивление: {best_r['price']:.2f} (сила {best_r['strength']:.2f})")
-            print(f"💰 Баланс: {balance:.2f} USDT | PnL: {total_pnl:.2f} | Просадка: {max_drawdown:.2f}%")
+            print(f"💰 Свободный баланс: {balance:.2f} USDT")
+            print(f"📊 Общий капитал: {total_equity:.2f} USDT | PnL: {total_pnl:.2f} | Просадка: {max_drawdown:.2f}%")
             print(f"📊 Позиций: {len(positions)} | Отложенных ордеров: {len(pending_orders)}")
             if positions:
                 print("📌 Открытые позиции:")
@@ -717,7 +714,7 @@ def main():
             print(f"{'='*80}")
             
             if int(time.time()) % 120 < 30:
-                compute_statistics()
+                compute_statistics(current_price)
             
             time.sleep(30)
             
